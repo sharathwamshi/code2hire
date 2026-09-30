@@ -1,0 +1,17 @@
+.cand-shell { min-height: 100vh; background: var(--surface); }
+.cand-topbar { display: flex; align-items: center; justify-content: space-between; padding: 14px 32px; background: var(--surface-raised); border-bottom: 1px solid var(--border-soft); position: sticky; top: 0; z-index: 20; }
+.cand-topbar-left { display: flex; align-items: center; gap: 34px; }
+.cand-brand { font-family: var(--font-display); font-weight: 700; font-size: 16px; color: var(--violet-700); }
+.cand-nav { display: flex; gap: 4px; }
+.cand-nav-link { display: flex; align-items: center; gap: 8px; padding: 9px 14px; border-radius: 999px; color: var(--ink-soft); text-decoration: none; font-size: 14px; font-weight: 500; transition: background 0.12s ease, color 0.12s ease; }
+.cand-nav-link:hover { background: var(--violet-050); color: var(--violet-700); }
+.cand-nav-link.active { background: var(--violet-100); color: var(--violet-700); }
+.cand-topbar-right { display: flex; align-items: center; gap: 12px; }
+.icon-only-link { color: var(--ink-faint); display: flex; padding: 7px; border-radius: 8px; }
+.icon-only-link:hover { background: var(--violet-050); color: var(--violet-700); }
+.cand-avatar { width: 30px; height: 30px; border-radius: 50%; background: var(--violet-100); color: var(--violet-700); display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 12.5px; }
+.cand-username { font-size: 13.5px; font-weight: 500; color: var(--ink-soft); }
+.cand-logout { background: transparent; border: none; color: var(--ink-faint); cursor: pointer; padding: 7px; border-radius: 8px; display: flex; }
+.cand-logout:hover { background: #FDECEC; color: #A63A31; }
+.cand-main { max-width: 1080px; margin: 0 auto; padding: 36px 28px 64px; }
+@media (max-width: 760px) { .cand-topbar { padding: 12px 16px; flex-wrap: wrap; gap: 10px; } .cand-topbar-left { gap: 16px; } .cand-nav-link span { display: none; } .cand-main { padding: 20px 16px 48px; } }

@@ -1,0 +1,21 @@
+.admin-shell { display: grid; grid-template-columns: 248px 1fr; min-height: 100vh; background: var(--surface); transition: grid-template-columns 0.2s ease; }
+.admin-shell.is-collapsed { grid-template-columns: 76px 1fr; }
+.admin-sidebar { background: linear-gradient(180deg, var(--violet-900) 0%, var(--violet-700) 100%); color: #fff; display: flex; flex-direction: column; padding: 20px 14px; position: sticky; top: 0; height: 100vh; }
+.admin-sidebar-top { display: flex; align-items: center; justify-content: space-between; padding: 6px 8px 22px 8px; }
+.admin-brand { font-family: var(--font-display); font-weight: 700; font-size: 15.5px; color: #fff; letter-spacing: -0.01em; white-space: nowrap; overflow: hidden; }
+.collapse-btn { background: rgba(255, 255, 255, 0.1); border: 1px solid rgba(255, 255, 255, 0.16); color: #fff; width: 28px; height: 28px; border-radius: 8px; display: flex; align-items: center; justify-content: center; cursor: pointer; flex-shrink: 0; }
+.collapse-btn:hover { background: rgba(255, 255, 255, 0.18); }
+.admin-nav { display: flex; flex-direction: column; gap: 4px; flex: 1; }
+.admin-nav-link { display: flex; align-items: center; gap: 12px; padding: 11px 12px; border-radius: 10px; color: var(--violet-100); text-decoration: none; font-size: 14px; font-weight: 500; transition: background 0.12s ease, color 0.12s ease; white-space: nowrap; overflow: hidden; }
+.admin-nav-link:hover { background: rgba(255, 255, 255, 0.08); color: #fff; }
+.admin-nav-link.active { background: rgba(255, 255, 255, 0.16); color: #fff; }
+.admin-sidebar-bottom { display: flex; flex-direction: column; gap: 10px; padding-top: 12px; border-top: 1px solid rgba(255, 255, 255, 0.14); }
+.admin-user-chip { display: flex; align-items: center; gap: 10px; padding: 6px 8px; }
+.avatar { width: 32px; height: 32px; border-radius: 50%; background: var(--violet-400); color: #2B1B54; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 13px; flex-shrink: 0; }
+.admin-user-name { font-size: 13.5px; font-weight: 600; color: #fff; line-height: 1.3; }
+.admin-user-role { font-size: 11.5px; color: var(--violet-100); }
+.logout-btn { display: flex; align-items: center; gap: 10px; background: transparent; border: 1px solid rgba(255, 255, 255, 0.16); color: var(--violet-100); padding: 9px 12px; border-radius: 10px; font-size: 13.5px; cursor: pointer; transition: background 0.12s ease; }
+.logout-btn:hover { background: rgba(255, 255, 255, 0.1); color: #fff; }
+.admin-main { padding: 32px 40px 60px; max-width: 1240px; width: 100%; }
+.admin-topbar-actions { position: absolute; top: 28px; right: 40px; display: flex; align-items: center; gap: 14px; }
+@media (max-width: 720px) { .admin-shell { grid-template-columns: 76px 1fr; } .admin-main { padding: 20px; } }
