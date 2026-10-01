@@ -15,7 +15,11 @@ const SILENCE_NUDGE_MS = 20000
 const MAX_LISTEN_MS = 5 * 60 * 1000 // safety cap for one continuous recording
 const GIVE_UP_CONFIRM_MS = 2500
 const AUTO_LISTEN_DELAY_MS = 400 // short buffer so the mic doesn't catch the AI's own trailing audio
-const ICE_SERVERS = [{ urls: 'stun:stun.l.google.com:19302' }]
+// A hardcoded fallback: STUN alone only helps when at least one side has an open NAT, and
+// fails once both sides are on real, separate, possibly-restrictive networks (the normal
+// case once this is actually hosted). The real list - including a TURN relay, if one is
+// configured - is fetched from the backend below and used once available.
+const DEFAULT_ICE_SERVERS = [{ urls: 'stun:stun.l.google.com:19302' }]
 const FACE_CHECK_INTERVAL_MS = 4000
 const FACE_MISS_STRIKES = 2 // consecutive misses before treating it as a real violation, not one bad frame
 const FACE_MODELS_URL = '/models'
@@ -83,6 +87,7 @@ export default function InterviewRoom() {
   const localStreamRef = useRef(null)
   const pcRef = useRef(null)
   const roomRef = useRef(null)
+  const iceServersRef = useRef(DEFAULT_ICE_SERVERS)
   const recorderRef = useRef(null)
   const recordedChunksRef = useRef([])
   const faceCheckRef = useRef(null)
@@ -227,16 +232,27 @@ export default function InterviewRoom() {
   // --- One-way WebRTC broadcast so an admin can watch the candidate live from the session
   //     page, reusing the same signaling relay Live Interview already uses. The candidate
   //     never receives anything back. ---
+  const fetchIceServers = async () => {
+    try {
+      const { data } = await client.get('/webrtc/ice-servers')
+      if (Array.isArray(data?.iceServers) && data.iceServers.length) iceServersRef.current = data.iceServers
+    } catch (e) {
+      // Live view is a bonus for the admin, not a requirement for the interview itself -
+      // keep the STUN-only default and carry on.
+    }
+  }
+
   const setupLiveViewPeer = (sessionId) => {
     const room = `ai-session-${sessionId}`
     roomRef.current = room
+    fetchIceServers()
     const socket = getSocket()
 
     const makeOfferForViewer = async () => {
       if (!localStreamRef.current || typeof RTCPeerConnection === 'undefined') return
       try {
         pcRef.current?.close()
-        const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS })
+        const pc = new RTCPeerConnection({ iceServers: iceServersRef.current })
         pcRef.current = pc
         localStreamRef.current.getTracks().forEach((t) => pc.addTrack(t, localStreamRef.current))
         pc.onicecandidate = (e) => { if (e.candidate) socket.emit('signal', { room, payload: { type: 'ice-candidate', candidate: e.candidate } }) }

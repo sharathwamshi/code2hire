@@ -7,7 +7,10 @@ import ShareReportButton from '../../components/ShareReportButton'
 import RecordingButton from '../../components/RecordingButton'
 import '../../styles/shared.css'
 
-const ICE_SERVERS = [{ urls: 'stun:stun.l.google.com:19302' }]
+// Hardcoded fallback: STUN alone fails once both sides are on real, separate, possibly
+// restrictive networks. The real list - including a TURN relay, if configured - is
+// fetched from the backend below before the peer connection is created.
+const DEFAULT_ICE_SERVERS = [{ urls: 'stun:stun.l.google.com:19302' }]
 
 const SEVERITY_ICON = { low: '🟡', medium: '🟠', high: '🔴' }
 
@@ -40,36 +43,54 @@ export default function InterviewSessionDetail() {
       setLiveConnected(false)
       return undefined
     }
+    let cancelled = false
+    let pc = null
+    let onSignal = null
     const room = `ai-session-${session.id}`
     const socket = getSocket()
-    const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS })
-    livePcRef.current = pc
-    pc.ontrack = (e) => { if (liveVideoRef.current) liveVideoRef.current.srcObject = e.streams[0] }
-    pc.onconnectionstatechange = () => setLiveConnected(pc.connectionState === 'connected')
-    pc.onicecandidate = (e) => { if (e.candidate) socket.emit('signal', { room, payload: { type: 'ice-candidate', candidate: e.candidate } }) }
 
-    const onSignal = async (payload) => {
+    const setup = async () => {
+      let iceServers = DEFAULT_ICE_SERVERS
       try {
-        if (payload.type === 'offer') {
-          await pc.setRemoteDescription(new RTCSessionDescription(payload.sdp))
-          const answer = await pc.createAnswer()
-          await pc.setLocalDescription(answer)
-          socket.emit('signal', { room, payload: { type: 'answer', sdp: answer } })
-        } else if (payload.type === 'ice-candidate') {
-          await pc.addIceCandidate(payload.candidate)
-        }
+        const { data } = await client.get('/webrtc/ice-servers')
+        if (Array.isArray(data?.iceServers) && data.iceServers.length) iceServers = data.iceServers
       } catch (e) {
-        // The live view is a convenience for the admin, not something the session page can
-        // depend on - a bad/late signal must never break the rest of this page.
+        // Keep the STUN-only default - live view staying STUN-only is better than not
+        // attempting the connection at all.
       }
+      if (cancelled) return
+
+      pc = new RTCPeerConnection({ iceServers })
+      livePcRef.current = pc
+      pc.ontrack = (e) => { if (liveVideoRef.current) liveVideoRef.current.srcObject = e.streams[0] }
+      pc.onconnectionstatechange = () => setLiveConnected(pc.connectionState === 'connected')
+      pc.onicecandidate = (e) => { if (e.candidate) socket.emit('signal', { room, payload: { type: 'ice-candidate', candidate: e.candidate } }) }
+
+      onSignal = async (payload) => {
+        try {
+          if (payload.type === 'offer') {
+            await pc.setRemoteDescription(new RTCSessionDescription(payload.sdp))
+            const answer = await pc.createAnswer()
+            await pc.setLocalDescription(answer)
+            socket.emit('signal', { room, payload: { type: 'answer', sdp: answer } })
+          } else if (payload.type === 'ice-candidate') {
+            await pc.addIceCandidate(payload.candidate)
+          }
+        } catch (e) {
+          // The live view is a convenience for the admin, not something the session page can
+          // depend on - a bad/late signal must never break the rest of this page.
+        }
+      }
+      socket.on('signal', onSignal)
+      socket.emit('join_room', { room, role: 'admin' })
     }
-    socket.on('signal', onSignal)
-    socket.emit('join_room', { room, role: 'admin' })
+    setup()
 
     return () => {
-      socket.off('signal', onSignal)
+      cancelled = true
+      if (onSignal) socket.off('signal', onSignal)
       socket.emit('leave_room', { room })
-      pc.close()
+      pc?.close()
       livePcRef.current = null
       setLiveConnected(false)
     }

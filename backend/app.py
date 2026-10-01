@@ -8,6 +8,7 @@ load_dotenv()
 
 from config import Config
 from extensions import db, bcrypt, jwt, socketio
+from routes.utils import role_required
 
 
 def create_app():
@@ -38,6 +39,38 @@ def create_app():
     @app.get("/api/health")
     def health():
         return jsonify({"status": "ok", "service": "Code2Hire API"})
+
+    @app.get("/api/webrtc/ice-servers")
+    @role_required("admin", "candidate")
+    def webrtc_ice_servers():
+        """ICE server list for the candidate-camera <-> admin live-view WebRTC connection.
+
+        STUN alone (the public Google server below) only works when at least one peer has
+        an open/permissive NAT - it fails whenever both sides are on restrictive networks,
+        which is the normal case once this is actually hosted rather than both peers being
+        on the same development machine. A TURN relay is required for those cases.
+
+        Configure one via TURN_URL / TURN_USERNAME / TURN_CREDENTIAL in .env (works with
+        any provider that issues static long-term credentials - a self-hosted coturn, or a
+        managed service such as Twilio Network Traversal Service, Metered, or Xirsys).
+        TURN_URL may hold several comma-separated URLs sharing the same credentials, e.g.
+        a UDP variant plus a TCP/443 variant for networks that block arbitrary UDP ports.
+
+        Without TURN_URL set, this still returns the STUN-only list - never a hard
+        failure - so nothing already working (easier network pairings) regresses; live
+        view simply won't connect across stricter network combinations until TURN is
+        configured. The credential itself is never shipped in frontend code.
+        """
+        servers = [{"urls": "stun:stun.l.google.com:19302"}]
+        turn_url = os.getenv("TURN_URL", "")
+        turn_urls = [u.strip() for u in turn_url.split(",") if u.strip()]
+        if turn_urls:
+            servers.append({
+                "urls": turn_urls if len(turn_urls) > 1 else turn_urls[0],
+                "username": os.getenv("TURN_USERNAME", ""),
+                "credential": os.getenv("TURN_CREDENTIAL", ""),
+            })
+        return jsonify({"iceServers": servers})
 
     @jwt.unauthorized_loader
     def unauthorized_callback(reason):
