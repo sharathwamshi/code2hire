@@ -1,10 +1,13 @@
 import { useEffect, useRef, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
-import { ArrowLeft, Play, RotateCcw, PauseCircle, AlertTriangle, Download, Sparkles, ShieldAlert, Radio } from 'lucide-react'
+import { ArrowLeft, Play, RotateCcw, PauseCircle, OctagonX, AlertTriangle, Download, Sparkles, ShieldAlert, Radio } from 'lucide-react'
 import client from '../../api/client'
 import { getSocket } from '../../api/socket'
 import ShareReportButton from '../../components/ShareReportButton'
 import RecordingButton from '../../components/RecordingButton'
+import ReportScoreCard from '../../components/ReportScoreCard'
+import ReviewPanel from '../../components/ReviewPanel'
+import { verdictLabel } from '../../components/stages'
 import '../../styles/shared.css'
 
 // Hardcoded fallback: STUN alone fails once both sides are on real, separate, possibly
@@ -103,7 +106,7 @@ export default function InterviewSessionDetail() {
     setActing(true); setError(''); setNotice('')
     try {
       await client.post(`/admin/interview-sessions/${id}/${action}`, { note })
-      setNotice(`Session ${action === 'manual-pause' ? 'paused' : action}.`)
+      setNotice(action === 'stop' ? 'Interview stopped. The report is being generated from the answers so far.' : `Session ${action === 'manual-pause' ? 'paused' : action}.`)
       load()
     } catch (err) {
       setError(err?.response?.data?.error || `Could not ${action} this session.`)
@@ -149,8 +152,8 @@ export default function InterviewSessionDetail() {
 
   return (
     <div>
-      <Link to="/admin/interview-sessions" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13.5, color: 'var(--ink-faint)', textDecoration: 'none', marginBottom: 18 }}>
-        <ArrowLeft size={15} /> Back to interview sessions
+      <Link to={session.user_id ? `/admin/users/${session.user_id}` : '/admin/users'} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13.5, color: 'var(--ink-faint)', textDecoration: 'none', marginBottom: 18 }}>
+        <ArrowLeft size={15} /> Back to {session.candidate_name || 'candidate'}
       </Link>
 
       <div className="page-header">
@@ -162,6 +165,12 @@ export default function InterviewSessionDetail() {
         <div style={{ display: 'flex', gap: 8 }}>
           {session.status === 'in_progress' && <button className="btn btn-outline" onClick={() => act('manual-pause')} disabled={acting}><PauseCircle size={15} /> Pause</button>}
           {session.status === 'paused' && <button className="btn btn-violet" onClick={() => act('resume')} disabled={acting}><Play size={15} /> Resume</button>}
+          {session.mode === 'ai' && ['in_progress', 'paused'].includes(session.status) && (
+            <button className="btn" style={{ background: '#E5456F', color: '#fff', borderColor: '#E5456F' }} disabled={acting}
+              onClick={() => { if (confirm('Stop this interview now? It will be closed and the report generated from the answers given so far. The candidate will not be able to continue.')) act('stop') }}>
+              <OctagonX size={15} /> Stop interview
+            </button>
+          )}
           <button className="btn btn-outline" onClick={() => { if (confirm('Restart? Current Q&A will be discarded.')) act('restart') }} disabled={acting}><RotateCcw size={15} /> Restart</button>
         </div>
       </div>
@@ -190,6 +199,16 @@ export default function InterviewSessionDetail() {
       {session.violation_count > 0 && (
         <div className="banner banner-warning" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <ShieldAlert size={16} /> This session has {session.violation_count} integrity violation{session.violation_count === 1 ? '' : 's'} logged below.
+        </div>
+      )}
+      {session.end_reason === 'time_up' && (
+        <div className="banner banner-info" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <ShieldAlert size={16} /> The {session.time_limit_minutes}-minute time limit ran out after {session.answered_count}{session.planned_count ? ` of ${session.planned_count}` : ''} questions. The report is based on those answers only.
+        </div>
+      )}
+      {session.end_reason === 'admin_stop' && (
+        <div className="banner banner-info" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <ShieldAlert size={16} /> This interview was stopped by an admin after {session.answered_count}{session.planned_count ? ` of ${session.planned_count}` : ''} questions. The report is based on those answers only.
         </div>
       )}
       {session.end_reason === 'candidate_exit' && (
@@ -276,14 +295,17 @@ export default function InterviewSessionDetail() {
         </div>
       </div>
 
+      {session.status === 'completed' && (
+        <div style={{ marginTop: 20 }}>
+          <ReviewPanel sessionId={session.id} completed hasReport={!!report} review={session.review} onSaved={() => load()} />
+        </div>
+      )}
+
       {report && (
         <div className="card" style={{ marginTop: 20 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
             <h3>Evaluation report</h3>
             <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-              <span className="stat-value" style={{ fontSize: 22 }}>{report.overall_score}/5</span>
-              <span className={`badge ${report.recommendation === 'Selected' ? 'badge-completed' : report.recommendation === 'Rejected' ? 'badge-paused' : 'badge-medium'}`}>{report.recommendation}</span>
-              <span className="badge badge-neutral">{report.verdict}</span>
               <button className="btn btn-outline btn-sm" onClick={downloadReportPdf} disabled={downloadingPdf}>
                 {downloadingPdf ? <span className="spinner dark" /> : <Download size={14} />} Download PDF
               </button>
@@ -296,8 +318,10 @@ export default function InterviewSessionDetail() {
                 ? 'The candidate can see the evaluation (score, strengths, Q&A) on their dashboard. The recommendation and your rationale stay private to you.'
                 : 'Only you can see this report. The candidate cannot see it until you share it.'}
             </span>
-            <ShareReportButton sessionId={session.id} shared={report.shared_with_candidate} onChanged={() => load()} />
+            <ShareReportButton sessionId={session.id} shared={report.shared_with_candidate} locked={!session.review} onChanged={() => load()} />
           </div>
+
+          <ReportScoreCard report={report} audience="admin" review={session.review} name={session.candidate_name} subtitle={session.jd_title || ''} />
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 20 }}>
             <div>

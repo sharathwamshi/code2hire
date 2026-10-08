@@ -17,5 +17,4 @@
 .logout-btn { display: flex; align-items: center; gap: 10px; background: transparent; border: 1px solid rgba(255, 255, 255, 0.16); color: var(--violet-100); padding: 9px 12px; border-radius: 10px; font-size: 13.5px; cursor: pointer; transition: background 0.12s ease; }
 .logout-btn:hover { background: rgba(255, 255, 255, 0.1); color: #fff; }
 .admin-main { padding: 32px 40px 60px; max-width: 1240px; width: 100%; }
-.admin-topbar-actions { position: absolute; top: 28px; right: 40px; display: flex; align-items: center; gap: 14px; }
 @media (max-width: 720px) { .admin-shell { grid-template-columns: 76px 1fr; } .admin-main { padding: 20px; } }

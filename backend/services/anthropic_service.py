@@ -243,6 +243,9 @@ the candidate shows no experience on a topic.
 - If the candidate goes off-topic, gently and briefly redirect them back to the interview, then \
 re-ask or continue the flow (e.g. "Let's stay focused on the interview. Please answer...").
 - Keep questions to ONE at a time, concise, and natural — never ask two things at once.
+- STRICT: ask at most ONE follow-up per requirement point. After the candidate answers that single \
+follow-up, move on to the next requirement point. Never ask a second follow-up on the same point, and \
+never go past the question count you are given.
 - After enough ground has been covered (you'll be told how many questions remain), wrap up warmly \
 and let the candidate know the interview is complete.
 
@@ -262,7 +265,8 @@ def generate_next_interview_message(
     """transcript: list of {role, content} for the conversation so far (role: ai|candidate|system)."""
     key_points_block = "\n".join(f"- {p}" for p in (jd_key_points or []))
     transcript_block = "\n".join(f"{t['role'].upper()}: {t['content']}" for t in transcript) or "(interview has not started yet)"
-    remaining = max(0, max_questions - questions_asked)
+    hard_limit = max_questions * 2  # N requirement points, each with at most one follow-up
+    remaining = max(0, hard_limit - questions_asked)
 
     user_content = (
         f"CANDIDATE NAME: {candidate_name}\n"
@@ -270,7 +274,7 @@ def generate_next_interview_message(
         f"JOB DESCRIPTION:\n{jd_content}\n\n"
         f"JD KEY POINTS:\n{key_points_block}\n\n"
         f"CANDIDATE RESUME:\n{resume_text}\n\n"
-        f"QUESTIONS ASKED SO FAR: {questions_asked} / {max_questions} (about {remaining} remaining)\n\n"
+        f"QUESTIONS ASKED SO FAR: {questions_asked} / {hard_limit} (hard limit: {max_questions} requirement points, each with at most one follow-up; {remaining} left)\n\n"
         f"CONVERSATION SO FAR:\n{transcript_block}\n\n"
         "Generate Octo's next message now, as JSON."
     )
@@ -302,8 +306,9 @@ Step 2 - the follow-up question:
 - off_topic -> briefly and politely steer back, then ask a simpler on-topic question.
 - It MUST NOT repeat, rephrase, or overlap with any question already asked (the list is provided) and it \
 must approach the topic from a different angle than the opening question.
-- ONE question only, natural spoken English (it will be read aloud), at most about 40 words, no lists, \
-no markdown, no praise or filler such as "Great answer".
+- ONE question only: a single sentence ending in exactly one question mark. Never chain two questions \
+(no "and also...", no "...? And how...?"). Natural spoken English (it will be read aloud), at most about 35 words, \
+no lists, no markdown, no praise or filler such as "Great answer".
 
 Respond with ONLY valid JSON (no markdown fences, no commentary):
 {

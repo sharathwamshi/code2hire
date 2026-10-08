@@ -5,6 +5,7 @@ import string
 import threading
 from datetime import datetime, timedelta
 
+from sqlalchemy.exc import IntegrityError
 from flask import Blueprint, request, jsonify, send_file, current_app
 
 from extensions import db, bcrypt
@@ -12,6 +13,7 @@ from models import (
     User, JobDescription, Feedback, PrepFlow,
     InterviewConfig, InterviewSession, IntegrityEvent, SessionActionLog,
     InterviewReport, InterviewTurn, InterviewDraft, Notification, Setting,
+    InterviewReview, REVIEW_VERDICTS,
 )
 from routes.utils import role_required
 from services import anthropic_service
@@ -135,6 +137,7 @@ def create_user():
         role="candidate", full_name=data.get("full_name"), email=data.get("email"),
         training_level=data.get("training_level", "medium"), jd_id=data.get("jd_id"),
         resume_text=data.get("resume_text"), must_change_password=True,
+        track="interview" if data.get("track") == "interview" else "practice",
     )
     db.session.add(user)
     db.session.commit()
@@ -150,7 +153,27 @@ def update_user(user_id):
     user.full_name = data.get("full_name", user.full_name)
     user.email = data.get("email", user.email)
     user.training_level = data.get("training_level", user.training_level)
+    if data.get("track") in ("practice", "interview"):
+        user.track = data["track"]
+        if user.track == "practice":
+            user.active_stage = "prepare"
+        elif user.active_stage != "interview" and user.resume_text:
+            # Moving to a real interview opens it straight away only when nothing is left to approve
+            # (a live call needs no question set; an AI interview needs approved questions).
+            cfg = InterviewConfig.query.filter_by(user_id=user.id).first()
+            approved = InterviewDraft.query.filter_by(user_id=user.id, jd_id=user.jd_id, status="approved").first()
+            if (cfg is not None and cfg.mode == "live") or approved:
+                user.active_stage = "interview"
     if data.get("active_stage") in ("prepare", "interview"):
+        if data["active_stage"] == "interview" and user.active_stage != "interview":
+            # Gate: a Real interview cannot be switched on until the questions are approved.
+            jd_id = data.get("jd_id", user.jd_id)
+            if not user.resume_text and not data.get("resume_text"):
+                return jsonify({"error": "Add this candidate's resume before moving them to the interview."}), 409
+            cfg = InterviewConfig.query.filter_by(user_id=user.id).first()
+            approved = InterviewDraft.query.filter_by(user_id=user.id, jd_id=jd_id, status="approved").first()
+            if (cfg is None or cfg.mode == "ai") and not approved:
+                return jsonify({"error": "Review and approve the interview questions before enabling the interview."}), 409
         user.active_stage = data["active_stage"]
     if "jd_id" in data:
         user.jd_id = data["jd_id"] or None
@@ -355,6 +378,14 @@ def upsert_interview_config(user_id):
     config.voice_enabled = data.get("voice_enabled", config.voice_enabled if config.voice_enabled is not None else True)
     config.voice_id = data.get("voice_id", config.voice_id)
     config.max_questions = data.get("max_questions", config.max_questions or 12)
+    if "time_limit_minutes" in data:
+        try:
+            tl = int(data["time_limit_minutes"]) if data["time_limit_minutes"] not in (None, "", 0, "0") else None
+        except (TypeError, ValueError):
+            return jsonify({"error": "Time limit must be a number of minutes."}), 400
+        if tl is not None and not (5 <= tl <= 240):
+            return jsonify({"error": "Time limit must be between 5 and 240 minutes (or empty for no limit)."}), 400
+        config.time_limit_minutes = tl
     config.skill_tags = data.get("skill_tags", config.skill_tags or [])
     config.violation_threshold = data.get("violation_threshold", config.violation_threshold or 1)
     config.require_fullscreen = data.get("require_fullscreen", config.require_fullscreen if config.require_fullscreen is not None else True)
@@ -378,6 +409,12 @@ def reopen_interview_attempt(user_id):
     config = InterviewConfig.query.filter_by(user_id=user_id).first()
     if not config:
         return jsonify({"error": "No interview has been configured for this candidate yet."}), 400
+    last_done = (
+        InterviewSession.query.filter_by(user_id=user_id, mode="ai", status="completed")
+        .order_by(InterviewSession.completed_at.desc(), InterviewSession.id.desc()).first()
+    )
+    if last_done is not None and last_done.review is None:
+        return jsonify({"error": "Review the latest interview (choose a verdict) before granting another attempt."}), 409
     config.attempts_allowed = (config.attempts_allowed or 1) + 1
     db.session.commit()
     return jsonify(config.to_dict())
@@ -391,7 +428,12 @@ def list_interview_sessions():
     if status:
         q = q.filter_by(status=status)
     sessions = q.order_by(InterviewSession.created_at.desc()).limit(200).all()
-    return jsonify([s.to_dict() for s in sessions])
+    rows = []
+    for s in sessions:
+        row = s.to_dict()
+        row["review_verdict"] = s.review.verdict if s.review else None
+        rows.append(row)
+    return jsonify(rows)
 
 
 @admin_bp.get("/users/<int:user_id>/interview-history")
@@ -410,6 +452,7 @@ def user_interview_history(user_id):
         row = s.to_dict()
         row["answered_count"] = s.answered_count()
         row["planned_count"] = s.planned_count() if s.mode == "ai" else None
+        row["review"] = s.review.to_dict() if s.review else None
         r = s.report
         row["report"] = {
             "overall_score": r.overall_score, "verdict": r.verdict, "recommendation": r.recommendation,
@@ -427,6 +470,7 @@ def get_interview_session(session_id):
     data = session.to_dict(include_turns=True)
     if session.report:
         data["report"] = session.report.to_dict()
+    data["review"] = session.review.to_dict() if session.review else None
     return jsonify(data)
 
 
@@ -443,6 +487,8 @@ def resume_interview_session(session_id):
 
         admin_id = int(get_jwt_identity())
         data = request.get_json(silent=True) or {}
+        if session.paused_at:  # the time limit does not run while paused
+            session.paused_seconds = (session.paused_seconds or 0) + max(0, int((datetime.utcnow() - session.paused_at).total_seconds()))
         session.status = "in_progress"
         session.paused_at = None
         session.pause_reason = None
@@ -472,6 +518,7 @@ def restart_interview_session(session_id):
         session.end_reason = None
         session.current_seq = 0
         session.question_count = 0
+        session.paused_seconds = 0
         session.draft_step = 0
         session.started_at = None
         session.paused_at = None
@@ -482,6 +529,41 @@ def restart_interview_session(session_id):
     except Exception as exc:
         db.session.rollback()
         return jsonify({"error": f"Unexpected error while restarting: {exc}"}), 500
+
+
+@admin_bp.post("/interview-sessions/<int:session_id>/stop")
+@role_required("admin")
+def stop_interview_session(session_id):
+    """Admin ends an AI interview for good (running or paused). It is closed as COMPLETED from
+    the answers collected so far and the report is generated from them. Unlike restart, nothing
+    is discarded."""
+    try:
+        session = InterviewSession.query.get_or_404(session_id)
+        if session.status == "completed":
+            return jsonify(session.to_dict())
+        if session.status not in ("in_progress", "paused"):
+            return jsonify({"error": f"Session is '{session.status}', there is no running interview to stop."}), 400
+
+        admin_id = int(get_jwt_identity())
+        data = request.get_json(silent=True) or {}
+        answered = session.answered_count()
+        session.status = "completed"
+        session.completed_at = datetime.utcnow()
+        session.paused_at = None
+        session.end_reason = "admin_stop"
+        note = data.get("note") or f"Interview stopped by admin - {answered} question(s) answered"
+        db.session.add(SessionActionLog(session_id=session.id, action="admin_stop", actor_admin_id=admin_id, note=note))
+        db.session.commit()
+
+        if answered > 0 and session.mode == "ai":
+            from routes.interview import _generate_report_async
+            threading.Thread(target=_generate_report_async, args=(current_app._get_current_object(), session.id), daemon=True).start()
+        out = session.to_dict()
+        out["report_pending"] = answered > 0 and session.mode == "ai"
+        return jsonify(out)
+    except Exception as exc:
+        db.session.rollback()
+        return jsonify({"error": f"Unexpected error while stopping: {exc}"}), 500
 
 
 @admin_bp.post("/interview-sessions/<int:session_id>/manual-pause")
@@ -582,30 +664,41 @@ def generate_session_report(session_id):
         current_app.logger.exception("Report generation failed for session %s", session.id)
         return jsonify({"error": "Could not generate the evaluation report right now. Please try again in a moment."}), 502
 
-    existing_report = InterviewReport.query.filter_by(session_id=session.id).first()
-    if existing_report:
-        db.session.delete(existing_report)
-        db.session.flush()
+    summary = {
+        "key_strengths": report_data.get("key_strengths", []),
+        "technical_skills": report_data.get("technical_skills", []),
+        "soft_skills": report_data.get("soft_skills", []),
+        "areas_for_improvement": report_data.get("areas_for_improvement", []),
+        "reason_for_selection": report_data.get("reason_for_selection", ""),
+    }
 
-    report = InterviewReport(
-        session_id=session.id,
-        overall_score=report_data.get("overall_score"),
-        verdict=report_data.get("verdict"),
-        recommendation=report_data.get("recommendation"),
-        summary_json={
-            "key_strengths": report_data.get("key_strengths", []),
-            "technical_skills": report_data.get("technical_skills", []),
-            "soft_skills": report_data.get("soft_skills", []),
-            "areas_for_improvement": report_data.get("areas_for_improvement", []),
-            "reason_for_selection": report_data.get("reason_for_selection", ""),
-        },
-        qna_json=report_data.get("qna", []),
-    )
-    db.session.add(report)
-    if not session.completed_at:
-        session.completed_at = datetime.utcnow()
-        session.status = "completed"
-    db.session.commit()
+    def _write_report():
+        # One report per session (unique key). Overwrite the existing row in place instead of
+        # delete + insert, so a report the automatic job saved a moment ago cannot collide.
+        rep = InterviewReport.query.filter_by(session_id=session.id).first()
+        if rep is None:
+            rep = InterviewReport(session_id=session.id)
+            db.session.add(rep)
+        rep.overall_score = report_data.get("overall_score")
+        rep.verdict = report_data.get("verdict")
+        rep.recommendation = report_data.get("recommendation")
+        rep.summary_json = summary
+        rep.qna_json = report_data.get("qna", [])
+        rep.generated_at = datetime.utcnow()
+        rep.shared_with_candidate = False
+        rep.shared_at = None
+        if not session.completed_at:
+            session.completed_at = datetime.utcnow()
+            session.status = "completed"
+        db.session.commit()
+        return rep
+
+    try:
+        report = _write_report()
+    except IntegrityError:
+        # The automatic job inserted its row between our check and our insert: retry as an update.
+        db.session.rollback()
+        report = _write_report()
     return jsonify(report.to_dict())
 
 
@@ -621,6 +714,8 @@ def share_report_with_candidate(session_id):
 
     data = request.get_json(silent=True) or {}
     shared = bool(data.get("shared", True))
+    if shared and session.review is None:
+        return jsonify({"error": "Review this interview (choose a verdict) before sharing the report with the candidate."}), 409
     if shared != bool(report.shared_with_candidate):
         report.shared_with_candidate = shared
         report.shared_at = datetime.utcnow() if shared else None
@@ -744,14 +839,13 @@ def download_recording(session_id):
 # the candidate waits mid-interview.
 # ===========================================================================
 
-@admin_bp.post("/users/<int:user_id>/interview-draft/generate")
-@role_required("admin")
-def generate_interview_draft(user_id):
-    user = User.query.get_or_404(user_id)
+def start_draft_generation(user):
+    """Kicks off background question generation for a candidate. Returns (payload, http_status).
+    Shared by the single-candidate endpoint and the role-level bulk action."""
     if not user.jd:
-        return jsonify({"error": "This candidate has no JD assigned yet."}), 400
+        return {"error": "This candidate has no JD assigned yet."}, 400
     if not user.resume_text:
-        return jsonify({"error": "This candidate has no resume on file yet."}), 400
+        return {"error": "This candidate has no resume on file yet."}, 400
 
     key_points = user.jd.key_points or []
     if not key_points:
@@ -760,9 +854,15 @@ def generate_interview_draft(user_id):
             user.jd.key_points = key_points
             db.session.commit()
         except Exception as exc:
-            return jsonify({"error": f"Could not analyze the job description: {exc}"}), 502
+            return {"error": f"Could not analyze the job description: {exc}"}, 502
     if not key_points:
-        return jsonify({"error": "Could not extract requirement points from this job description."}), 502
+        return {"error": "Could not extract requirement points from this job description."}, 502
+
+    # Apply the configured question count: one question (plus one follow-up) per requirement
+    # point, for at most `max_questions` points - not one per point in the whole JD.
+    cfg = InterviewConfig.query.filter_by(user_id=user.id).first()
+    limit = (cfg.max_questions if cfg and cfg.max_questions else 12)
+    key_points = key_points[:max(1, int(limit))]
 
     draft = InterviewDraft(
         user_id=user.id, jd_id=user.jd_id, difficulty=user.training_level,
@@ -778,8 +878,15 @@ def generate_interview_draft(user_id):
         daemon=True,
     )
     thread.start()
+    return {"draft_id": draft.id, "total_topics": len(key_points), "status": "generating"}, 202
 
-    return jsonify({"draft_id": draft.id, "total_topics": len(key_points), "status": "generating"}), 202
+
+@admin_bp.post("/users/<int:user_id>/interview-draft/generate")
+@role_required("admin")
+def generate_interview_draft(user_id):
+    user = User.query.get_or_404(user_id)
+    payload, status = start_draft_generation(user)
+    return jsonify(payload), status
 
 
 def _run_draft_generation(app_obj, draft_id, resume_text, jd_content, key_points, difficulty):
@@ -919,5 +1026,75 @@ def approve_interview_draft(draft_id):
 
     draft.status = "approved"
     draft.approved_at = datetime.utcnow()
+    draft.approved_by = int(get_jwt_identity())
+    owner = User.query.get(draft.user_id)
+    if owner is not None and owner.track == "interview" and owner.active_stage != "interview" and owner.resume_text:
+        owner.active_stage = "interview"  # approving the questions is what unlocks the interview
     db.session.commit()
     return jsonify(draft.to_dict())
+
+
+
+# ===========================================================================
+# REVIEW GATE - mandatory sign-off between "interview completed" and "share / next attempt"
+# ===========================================================================
+
+@admin_bp.get("/interview-sessions/<int:session_id>/review")
+@role_required("admin")
+def get_session_review(session_id):
+    session = InterviewSession.query.get_or_404(session_id)
+    return jsonify(session.review.to_dict() if session.review else None)
+
+
+@admin_bp.post("/interview-sessions/<int:session_id>/review")
+@role_required("admin")
+def review_session(session_id):
+    """Records (or changes) the verdict on a completed interview. Any admin may review.
+
+    - Needs a finished interview with a generated report: you cannot sign off on nothing.
+    - "reject" is a hiring decision only; it never touches the candidate's login.
+    - "re_interview" makes sure the candidate has exactly one more attempt available
+      (idempotent: re-saving the same verdict never hands out a second extra attempt)."""
+    session = InterviewSession.query.get_or_404(session_id)
+    data = request.get_json(silent=True) or {}
+    verdict = (data.get("verdict") or "").strip().lower()
+    note = (data.get("note") or "").strip() or None
+
+    if verdict not in REVIEW_VERDICTS:
+        return jsonify({"error": "Choose a verdict: proceed, hold, reject or re_interview."}), 400
+    if session.status != "completed":
+        return jsonify({"error": "Only a completed interview can be reviewed."}), 409
+    if session.report is None:
+        return jsonify({"error": "Generate the report first, then review it."}), 409
+
+    admin_id = int(get_jwt_identity())
+    review = session.review
+    if review is None:
+        review = InterviewReview(session_id=session.id, verdict=verdict, note=note, reviewer_id=admin_id)
+        db.session.add(review)
+    else:
+        review.verdict = verdict
+        review.note = note
+        review.reviewer_id = admin_id
+        review.reviewed_at = datetime.utcnow()
+
+    granted = False
+    if verdict == "re_interview":
+        config = InterviewConfig.query.filter_by(user_id=session.user_id).first()
+        if config is None:
+            db.session.rollback()
+            return jsonify({"error": "No interview has been configured for this candidate yet."}), 400
+        completed = InterviewSession.query.filter_by(
+            user_id=session.user_id, jd_id=session.jd_id, mode="ai", status="completed",
+        ).count()
+        if (config.attempts_allowed or 1) <= completed:
+            config.attempts_allowed = completed + 1
+            granted = True
+        review.reopened = True
+
+    db.session.add(SessionActionLog(
+        session_id=session.id, action="review", actor_admin_id=admin_id,
+        note=f"Verdict: {verdict}" + (f" - {note[:300]}" if note else "") + (" (one more attempt granted)" if granted else ""),
+    ))
+    db.session.commit()
+    return jsonify({"review": review.to_dict(), "attempt_granted": granted})

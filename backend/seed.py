@@ -84,10 +84,29 @@ def seed_admin():
     print("must_change_password is set, so this password must be changed on first login.")
 
 
+def ensure_additive_columns():
+    """Columns added after the schema file was exported. Adds them only when missing, so
+    "import the schema file, then seed" still ends with a database the current code can use
+    (the same change ships as migrations/010_review_gate.sql for existing live databases)."""
+    from sqlalchemy import inspect, text
+    insp = inspect(db.engine)
+    cols = {c["name"] for c in insp.get_columns("interview_drafts")}
+    if "approved_by" not in cols:
+        db.session.execute(text("ALTER TABLE interview_drafts ADD COLUMN approved_by INT NULL"))
+        db.session.commit()
+        print("Added interview_drafts.approved_by.")
+    ucols = {c["name"] for c in insp.get_columns("users")}
+    if "track" not in ucols:
+        db.session.execute(text("ALTER TABLE users ADD COLUMN track VARCHAR(12) NOT NULL DEFAULT 'practice'"))
+        db.session.commit()
+        print("Added users.track.")
+
+
 with app.app_context():
     # Creates any table that doesn't already exist. If the schema file was already
     # imported, this is a no-op for every table. It never alters or drops an
     # existing table, so it's safe to run against either a bare or a pre-seeded DB.
     db.create_all()
     print("Tables created / verified.")
+    ensure_additive_columns()
     seed_admin()

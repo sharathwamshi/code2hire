@@ -138,6 +138,7 @@ export default function CandidateDashboard() {
                       <td>
                         <span className={`badge ${cls}`}>{label}</span>
                         {row.end_reason === 'candidate_exit' && <span className="badge badge-medium" style={{ marginLeft: 6 }}>Ended early</span>}
+                    {row.end_reason === 'time_up' && <span className="badge badge-medium" style={{ marginLeft: 6 }}>Time up</span>}
                       </td>
                       <td>{row.mode === 'ai' ? `${row.answered_count}${row.planned_count ? ` of ${row.planned_count}` : ''}` : '—'}</td>
                       <td>

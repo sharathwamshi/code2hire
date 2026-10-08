@@ -19,6 +19,10 @@ class User(db.Model):
 
     training_level = db.Column(db.String(10), nullable=False, default="medium")  # low | medium | high
     active_stage = db.Column(db.String(10), nullable=False, default="prepare")  # prepare | interview
+    # What this candidate is here for: "practice" (preparation only) or "interview" (a real, reviewed
+    # interview). active_stage is the live access switch; track is the intent. A real-interview
+    # candidate keeps active_stage="prepare" until their questions are approved, then it flips.
+    track = db.Column(db.String(12), nullable=False, default="practice", server_default="practice")
 
     jd_id = db.Column(db.Integer, db.ForeignKey("job_descriptions.id"), nullable=True)
 
@@ -55,6 +59,7 @@ class User(db.Model):
             "role": self.role,
             "training_level": self.training_level,
             "active_stage": self.active_stage,
+            "track": self.track or "practice",
             "jd_id": self.jd_id,
             "jd_title": self.jd.title if self.jd else None,
             "has_resume": bool(self.resume_text),
@@ -236,6 +241,8 @@ class InterviewConfig(db.Model):
     voice_enabled = db.Column(db.Boolean, default=True)
     voice_id = db.Column(db.String(100), nullable=True)
     max_questions = db.Column(db.Integer, default=12)
+    # Overall time limit for the AI interview, in minutes. NULL = no limit.
+    time_limit_minutes = db.Column(db.Integer, nullable=True)
     skill_tags = db.Column(db.JSON, nullable=True)
 
     violation_threshold = db.Column(db.Integer, default=1)
@@ -264,6 +271,7 @@ class InterviewConfig(db.Model):
             "voice_enabled": self.voice_enabled,
             "voice_id": self.voice_id,
             "max_questions": self.max_questions,
+            "time_limit_minutes": self.time_limit_minutes,
             "skill_tags": self.skill_tags or [],
             "violation_threshold": self.violation_threshold,
             "require_fullscreen": self.require_fullscreen,
@@ -309,7 +317,9 @@ class InterviewSession(db.Model):
     pause_reason = db.Column(db.String(20), nullable=True)
     # violation | candidate_stop — why the session is currently paused
     end_reason = db.Column(db.String(20), nullable=True)
-    # candidate_exit | NULL — set when the candidate chose to end the interview early
+    # candidate_exit | admin_stop | time_up | NULL — why the interview ended before its natural close
+    # Seconds spent paused (violation / admin / stop request). The time limit does not run while paused.
+    paused_seconds = db.Column(db.Integer, nullable=False, default=0, server_default=db.text("0"))
     completed_at = db.Column(db.DateTime, nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
@@ -331,6 +341,7 @@ class InterviewSession(db.Model):
         order_by="SessionActionLog.created_at",
     )
     report = db.relationship("InterviewReport", back_populates="session", uselist=False, cascade="all, delete-orphan")
+    review = db.relationship("InterviewReview", back_populates="session", uselist=False, cascade="all, delete-orphan")
 
     def violation_count(self):
         return len([v for v in self.violations if v.event_type not in NON_BLOCKING_EVENT_TYPES])
@@ -340,13 +351,31 @@ class InterviewSession(db.Model):
 
     def planned_count(self):
         """How many questions this interview was going to ask (None when unknown, e.g. live calls)."""
-        if self.draft and self.draft.questions_json:
-            return len(self.draft.questions_json)
         cfg = InterviewConfig.query.get(self.config_id) if self.config_id else None
+        if self.draft and self.draft.questions_json:
+            have = len(self.draft.questions_json)
+            cap = cfg.max_questions if cfg and cfg.max_questions else None
+            return min(have, cap) if cap else have
         return cfg.max_questions if cfg and cfg.max_questions else None
 
     def completion_note(self):
         """Context handed to the report generator when the interview did not run to its end."""
+        if self.end_reason == "time_up":
+            planned = self.planned_count()
+            of = f" of {planned}" if planned else ""
+            return (
+                f"The interview's time limit ran out after {self.answered_count()}{of} planned question(s) "
+                "were answered. Judge only what was actually answered, and say plainly in the narrative that "
+                "the interview was cut short by the time limit."
+            )
+        if self.end_reason == "admin_stop":
+            planned = self.planned_count()
+            of = f" of {planned}" if planned else ""
+            return (
+                f"The interviewer stopped this interview early, after {self.answered_count()}{of} planned "
+                "question(s) were answered. Judge only what was actually answered, and say plainly in the "
+                "narrative that the interview was incomplete."
+            )
         if self.end_reason != "candidate_exit":
             return None
         planned = self.planned_count()
@@ -360,7 +389,30 @@ class InterviewSession(db.Model):
     def notice_count(self):
         return len([v for v in self.violations if v.event_type in NON_BLOCKING_EVENT_TYPES])
 
-    def to_dict(self, include_turns=False):
+    def time_limit_minutes(self):
+        if self.mode != "ai":
+            return None
+        cfg = InterviewConfig.query.get(self.config_id) if self.config_id else InterviewConfig.query.filter_by(user_id=self.user_id).first()
+        return cfg.time_limit_minutes if cfg and cfg.time_limit_minutes else None
+
+    def remaining_seconds(self):
+        """Seconds left on the interview clock (may be negative once expired); None when there is no limit.
+        Paused time does not count against the candidate."""
+        limit = self.time_limit_minutes()
+        if not limit:
+            return None
+        if not self.started_at:
+            return limit * 60
+        if self.status == "paused" and self.paused_at:
+            end = self.paused_at
+        elif self.status == "completed" and self.completed_at:
+            end = self.completed_at
+        else:
+            end = datetime.utcnow()
+        used = (end - self.started_at).total_seconds() - (self.paused_seconds or 0)
+        return int(limit * 60 - used)
+
+    def to_dict(self, include_turns=False, candidate_view=False):
         data = {
             "id": self.id,
             "user_id": self.user_id,
@@ -379,6 +431,8 @@ class InterviewSession(db.Model):
             "pause_reason": self.pause_reason,
             "end_reason": self.end_reason,
             "completed_at": self.completed_at.isoformat() if self.completed_at else None,
+            "time_limit_minutes": self.time_limit_minutes(),
+            "remaining_seconds": (lambda r: None if r is None else max(0, r))(self.remaining_seconds()),
             "has_report": self.report is not None,
             "recording_path": bool(self.recording_path),
         }
@@ -387,7 +441,9 @@ class InterviewSession(db.Model):
             data["planned_count"] = self.planned_count() if self.mode == "ai" else None
             data["turns"] = [t.to_dict() for t in self.turns]
             data["violations"] = [v.to_dict() for v in self.violations]
-            data["action_logs"] = [a.to_dict() for a in self.action_logs]
+            if not candidate_view:
+                # Admin-only audit trail (who paused/reviewed/shared, with notes). Never sent to the candidate.
+                data["action_logs"] = [a.to_dict() for a in self.action_logs]
         return data
 
 
@@ -491,6 +547,41 @@ class InterviewReport(db.Model):
         }
 
 
+REVIEW_VERDICTS = ("proceed", "hold", "reject", "re_interview")
+
+
+class InterviewReview(db.Model):
+    """The mandatory human sign-off on a completed interview's report.
+
+    Nothing downstream (sharing the report with the candidate, granting another attempt)
+    is allowed until an admin has recorded a verdict here. Any admin may review. A
+    "reject" verdict is a recruiting decision only - it does not touch the candidate's login.
+    "re_interview" grants exactly one extra attempt (see admin.review_session)."""
+    __tablename__ = "interview_reviews"
+
+    id = db.Column(db.Integer, primary_key=True)
+    session_id = db.Column(db.Integer, db.ForeignKey("interview_sessions.id"), nullable=False, unique=True)
+    verdict = db.Column(db.String(20), nullable=False)  # proceed | hold | reject | re_interview
+    note = db.Column(db.Text, nullable=True)
+    reviewer_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True)
+    reviewed_at = db.Column(db.DateTime, default=datetime.utcnow)
+    reopened = db.Column(db.Boolean, nullable=False, default=False, server_default=db.text("0"))
+
+    session = db.relationship("InterviewSession", back_populates="review")
+    reviewer = db.relationship("User")
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "session_id": self.session_id,
+            "verdict": self.verdict,
+            "note": self.note,
+            "reviewer_name": (self.reviewer.full_name or self.reviewer.username) if self.reviewer else None,
+            "reviewed_at": self.reviewed_at.isoformat() if self.reviewed_at else None,
+            "reopened": bool(self.reopened),
+        }
+
+
 class InterviewDraft(db.Model):
     """A pre-generated, admin-reviewed set of interview questions for a
     candidate+JD pair. Generated once in the background, reviewed and edited
@@ -515,9 +606,11 @@ class InterviewDraft(db.Model):
 
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     approved_at = db.Column(db.DateTime, nullable=True)
+    approved_by = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True)
 
-    user = db.relationship("User")
+    user = db.relationship("User", foreign_keys=[user_id])
     jd = db.relationship("JobDescription")
+    approver = db.relationship("User", foreign_keys=[approved_by])
 
     def to_dict(self):
         return {
@@ -532,6 +625,7 @@ class InterviewDraft(db.Model):
             "questions": self.questions_json or [],
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "approved_at": self.approved_at.isoformat() if self.approved_at else None,
+            "approved_by_name": (self.approver.full_name or self.approver.username) if self.approver else None,
         }
 
 

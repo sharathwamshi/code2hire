@@ -28,11 +28,13 @@ def create_app():
     from routes.admin import admin_bp
     from routes.candidate import candidate_bp
     from routes.interview import interview_bp
+    from routes.hub import hub_bp
 
     app.register_blueprint(auth_bp)
     app.register_blueprint(admin_bp)
     app.register_blueprint(candidate_bp)
     app.register_blueprint(interview_bp)
+    app.register_blueprint(hub_bp)
 
     import sockets  # noqa: F401 - registers socketio event handlers
 

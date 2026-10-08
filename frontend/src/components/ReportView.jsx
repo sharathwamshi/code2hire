@@ -1,7 +1,5 @@
 import '../styles/shared.css'
-
-const recommendationBadge = (rec) =>
-  rec === 'Selected' ? 'badge-completed' : rec === 'Rejected' ? 'badge-paused' : 'badge-medium'
+import ReportScoreCard from './ReportScoreCard'
 
 function PointList({ title, items }) {
   return (
@@ -19,19 +17,13 @@ function PointList({ title, items }) {
  * recommendation and the selection rationale. `audience="candidate"` shows the evaluation
  * only - the server already omits those two fields for candidates, this is a second guard.
  */
-export default function ReportView({ report, audience = 'admin' }) {
+export default function ReportView({ report, audience = 'admin', review = null, name = '', subtitle = '' }) {
   const isAdmin = audience === 'admin'
   const summary = report.summary || {}
 
   return (
     <div>
-      <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 18 }}>
-        <span className="stat-value" style={{ fontSize: 24 }}>{report.overall_score}/5</span>
-        {report.verdict && <span className="badge badge-neutral">{report.verdict}</span>}
-        {isAdmin && report.recommendation && (
-          <span className={`badge ${recommendationBadge(report.recommendation)}`}>{report.recommendation}</span>
-        )}
-      </div>
+      <ReportScoreCard report={report} audience={audience} review={review} name={name} subtitle={subtitle} />
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 20 }}>
         <PointList title="Key strengths" items={summary.key_strengths} />

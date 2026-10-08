@@ -1,6 +1,7 @@
 import difflib
 import os
 import threading
+from sqlalchemy.exc import IntegrityError
 from datetime import datetime, timedelta
 
 from flask import Blueprint, request, jsonify, current_app
@@ -50,17 +51,39 @@ def _approved_draft_for(user):
     )
 
 
-def _draft_turn_at(draft, step):
-    """Flattens the draft's topics into 2 turns each (opening, then a canned
-    follow-up). Returns (message, topic, is_closing) for the given step."""
+def _question_limit(draft, config):
+    """How many main questions this interview may ask: the admin's configured count,
+    never more than the draft holds (a draft generated before the count was changed can
+    be longer than the count that is now configured)."""
+    have = len(draft.questions_json or []) if draft else 0
+    cap = (config.max_questions if config and config.max_questions else None) or have
+    return max(0, min(have, int(cap)))
+
+
+def _draft_turn_at(draft, step, limit=None):
+    """Flattens the draft's topics into 2 turns each (the question, then exactly ONE
+    follow-up). Returns (message, topic, is_closing) for the given step. `limit` is the
+    configured number of main questions; past it the interview closes."""
     questions = draft.questions_json or []
     topic_index = step // 2
+    if limit is not None:
+        questions = questions[:limit]
     if topic_index >= len(questions):
         return None, None, True
     q = questions[topic_index]
     if step % 2 == 0:
-        return q["opening_question"], q["jd_point"], False
-    return q["follow_up_question"], q["jd_point"], False
+        return _single_question(q["opening_question"]), q["jd_point"], False
+    return _single_question(q["follow_up_question"]), q["jd_point"], False
+
+
+def _single_question(text):
+    """A follow-up is ONE question. If the text strings several together
+    ("What did you use? And why? How did it scale?") keep only the first."""
+    t = (text or "").strip()
+    i = t.find("?")
+    if i != -1 and t[i + 1:].strip():
+        return t[:i + 1].strip()
+    return t
 
 
 def _too_similar(candidate_text, earlier_questions):
@@ -95,7 +118,7 @@ def _adaptive_follow_up(user, session, step, answer_text):
         return None
 
     follow_up = (result.get("follow_up_question") if isinstance(result, dict) else "") or ""
-    follow_up = follow_up.strip()
+    follow_up = _single_question(follow_up)
     if not follow_up or _too_similar(follow_up, asked):
         return None
     return follow_up
@@ -180,6 +203,10 @@ def start_interview():
     if existing and existing.status == "in_progress":
         session = existing
     else:
+        if not _approved_draft_for(user):
+            return jsonify({
+                "error": "Your interview isn't ready yet - the questions are still waiting for approval. Please contact your admin.",
+            }), 403
         if not existing:
             # No not_started/in_progress/paused session to continue: this would create a
             # brand new attempt. An admin restarting an existing session (which leaves it
@@ -210,7 +237,7 @@ def start_interview():
 
     if not session.turns:
         if session.draft:
-            message, topic, _ = _draft_turn_at(session.draft, 0)
+            message, topic, _ = _draft_turn_at(session.draft, 0, _question_limit(session.draft, config))
             greeting = f"Hello {user.full_name or user.username}, I'm your AI interviewer for the {user.jd.title} role. Let's begin.\n\n{message}"
             turn = InterviewTurn(session_id=session.id, seq=1, role="ai", content=greeting, topic=topic)
             db.session.add(turn)
@@ -235,10 +262,11 @@ def start_interview():
             session.question_count = 1
             db.session.commit()
 
-    total_questions = len(session.draft.questions_json) if session.draft and session.draft.questions_json else config.max_questions
+    total_questions = _question_limit(session.draft, config) if session.draft and session.draft.questions_json else config.max_questions
     return jsonify({
-        "session": session.to_dict(include_turns=True), "voice_enabled": config.voice_enabled,
+        "session": session.to_dict(include_turns=True, candidate_view=True), "voice_enabled": config.voice_enabled,
         "voice_id": config.voice_id, "total_questions": total_questions, "using_draft": bool(session.draft_id),
+        "time_limit_minutes": session.time_limit_minutes(), "remaining_seconds": (lambda r: None if r is None else max(0, r))(session.remaining_seconds()),
     })
 
 
@@ -251,9 +279,15 @@ def submit_answer(session_id):
     if session.status == "paused":
         return jsonify({"error": "Interview is paused pending admin review."}), 423
     if session.status != "in_progress":
-        return jsonify({"error": f"Interview is '{session.status}', cannot accept an answer."}), 400
+        return jsonify({"error": f"Interview is '{session.status}', cannot accept an answer.", "session_status": session.status}), 409 if session.status == "completed" else 400
 
     data = request.get_json(force=True) or {}
+    rem = session.remaining_seconds()
+    if rem is not None and rem <= -20:
+        # The clock ran out and the browser did not (or could not) end the interview itself: keep this
+        # last answer, close the session, and tell the client it is over.
+        _close_early(session, user, (data.get("answer") or "").strip(), "time_up")
+        return jsonify({"error": "The time limit for this interview has been reached.", "session_status": "completed"}), 409
     answer_text = (data.get("answer") or "").strip()
     if not answer_text:
         return jsonify({"error": "Answer text is required"}), 400
@@ -271,11 +305,17 @@ def submit_answer(session_id):
             # for this topic entirely and move straight to the next one.
             step_to_deliver = session.draft_step + 1
 
-        message, topic, is_closing = _draft_turn_at(session.draft, step_to_deliver)
+        limit = _question_limit(session.draft, _active_config(user))
+        message, topic, is_closing = _draft_turn_at(session.draft, step_to_deliver, limit)
         if not is_closing and step_to_deliver % 2 == 1:
             # A follow-up slot: analyse what the candidate actually said and ask about
             # that. The pre-generated follow-up is only the fallback.
-            message = _adaptive_follow_up(user, session, step_to_deliver, answer_text) or message
+            message = _single_question(_adaptive_follow_up(user, session, step_to_deliver, answer_text) or message)
+            # The follow-up call can take a while; the candidate may have stopped the
+            # interview meanwhile. Never add turns to (or re-close) a session that ended.
+            db.session.refresh(session)
+            if session.status != "in_progress":
+                return jsonify({"error": f"Interview is '{session.status}'.", "session_status": session.status}), 409
         if is_closing:
             message = f"That covers everything I needed to ask, {user.full_name or user.username} — thank you for your time. This concludes the interview."
         next_seq = session.current_seq + 1
@@ -297,6 +337,22 @@ def submit_answer(session_id):
         return jsonify({"turn": ai_turn.to_dict(), "session_status": session.status})
 
     config = _active_config(user)
+    cap = (config.max_questions if config and config.max_questions else 12)
+    if session.question_count >= cap * 2:
+        # Hard stop: `cap` questions, each with at most one follow-up. The model is not
+        # asked - it must not be able to keep going.
+        closing = (f"That covers everything I needed to ask, {user.full_name or user.username} \u2014 "
+                   "thank you for your time. This concludes the interview.")
+        next_seq = session.current_seq + 1
+        ai_turn = InterviewTurn(session_id=session.id, seq=next_seq, role="ai", content=closing, topic="closing")
+        db.session.add(ai_turn)
+        session.current_seq = next_seq
+        session.status = "completed"
+        session.completed_at = datetime.utcnow()
+        db.session.commit()
+        app_obj = current_app._get_current_object()
+        threading.Thread(target=_generate_report_async, args=(app_obj, session.id), daemon=True).start()
+        return jsonify({"turn": ai_turn.to_dict(), "session_status": session.status})
     try:
         msg = anthropic_service.generate_next_interview_message(
             candidate_name=user.full_name or user.username,
@@ -371,30 +427,22 @@ def _generate_report_async(app_obj, session_id):
             message = (f"Report ready for {name}'s early-ended interview "
                        f"({session.answered_count()}{f' of {planned}' if planned else ''} questions answered). "
                        "Review it, then share it with the candidate.")
+        elif session.end_reason == "time_up":
+            message = f"{name}'s interview hit its time limit — report ready from the {session.answered_count()} answer(s) given. Review it, then share it with the candidate."
         else:
             message = f"Interview completed for {name} — report ready. Review it, then share it with the candidate."
         db.session.add(Notification(type="interview_completed", session_id=session.id, message=message))
-        db.session.commit()
+        try:
+            db.session.commit()
+        except IntegrityError:
+            # An admin generated the report by hand while this job was running: theirs stands.
+            db.session.rollback()
         db.session.remove()
 
 
-@interview_bp.post("/<int:session_id>/exit")
-@role_required("candidate")
-def candidate_exit_interview(session_id):
-    """The candidate chose to leave. The interview is closed as COMPLETED using
-    everything collected so far (including an answer they had typed/spoken but not
-    yet sent), and the report is built from that data."""
-    user = User.query.get_or_404(int(get_jwt_identity()))
-    session = InterviewSession.query.filter_by(id=session_id, user_id=user.id).first_or_404()
-
-    if session.status == "completed":  # double click / retry: already done
-        return jsonify({"status": "completed", "answered": session.answered_count(),
-                        "planned": session.planned_count(), "report_pending": False})
-    if session.status != "in_progress":
-        return jsonify({"error": f"Interview is '{session.status}', it can't be ended from here."}), 400
-
-    data = request.get_json(silent=True) or {}
-    pending = (data.get("pending_answer") or "").strip()
+def _close_early(session, user, pending, reason):
+    """Close an in-progress AI interview as COMPLETED from what was collected so far (including an
+    answer typed/spoken but not yet sent) and start the report. reason: candidate_exit | time_up."""
     last_turn = session.turns[-1] if session.turns else None
     if pending and last_turn is not None and last_turn.role == "ai":
         seq = session.current_seq + 1
@@ -408,23 +456,52 @@ def candidate_exit_interview(session_id):
 
     session.status = "completed"
     session.completed_at = datetime.utcnow()
-    session.end_reason = "candidate_exit"
+    session.end_reason = reason
 
-    if answered == 0:
-        note = "Candidate exited before answering any question"
-        message = f"{name} exited their interview before answering any question — there is nothing to report on."
+    if reason == "time_up":
+        what, ntype = "ran out of time", "interview_time_up"
     else:
-        note = f"Candidate exited the interview early — {answered}{of} question(s) answered"
-        message = f"{name} ended their interview early ({answered}{of} answered). The report is being generated."
-    db.session.add(SessionActionLog(session_id=session.id, action="exit", actor_admin_id=None, note=note))
-    db.session.add(Notification(type="interview_exited", session_id=session.id, message=message))
+        what, ntype = "ended their interview early", "interview_exited"
+    if answered == 0:
+        note = "Candidate exited before answering any question" if reason != "time_up" else "Time limit reached before any question was answered"
+        message = f"{name} {what} before answering any question \u2014 there is nothing to report on."
+    else:
+        note = (f"Candidate exited the interview early \u2014 {answered}{of} question(s) answered" if reason != "time_up"
+                else f"Time limit reached \u2014 {answered}{of} question(s) answered")
+        message = f"{name} {what} ({answered}{of} answered). The report is being generated."
+    db.session.add(SessionActionLog(session_id=session.id, action="exit" if reason != "time_up" else "time_up", actor_admin_id=None, note=note))
+    db.session.add(Notification(type=ntype, session_id=session.id, message=message))
     db.session.commit()
 
     if answered > 0:
         app_obj = current_app._get_current_object()
         threading.Thread(target=_generate_report_async, args=(app_obj, session.id), daemon=True).start()
+    return {"status": "completed", "answered": answered, "planned": planned, "report_pending": answered > 0, "end_reason": reason}
 
-    return jsonify({"status": "completed", "answered": answered, "planned": planned, "report_pending": answered > 0})
+
+@interview_bp.post("/<int:session_id>/exit")
+@role_required("candidate")
+def candidate_exit_interview(session_id):
+    """The candidate chose to leave (or their clock ran out). The interview is closed as COMPLETED using
+    everything collected so far and the report is built from that data. The 'time_up' reason is only
+    honoured when the server's own clock agrees that the limit has been reached."""
+    user = User.query.get_or_404(int(get_jwt_identity()))
+    session = InterviewSession.query.filter_by(id=session_id, user_id=user.id).first_or_404()
+
+    if session.status == "completed":  # double click / retry: already done
+        return jsonify({"status": "completed", "answered": session.answered_count(),
+                        "planned": session.planned_count(), "report_pending": False, "end_reason": session.end_reason})
+    if session.status != "in_progress":
+        return jsonify({"error": f"Interview is '{session.status}', it can't be ended from here."}), 400
+
+    data = request.get_json(silent=True) or {}
+    pending = (data.get("pending_answer") or "").strip()
+    reason = "candidate_exit"
+    if data.get("reason") == "time_up":
+        rem = session.remaining_seconds()
+        if rem is not None and rem <= 5:  # small allowance for clock drift between browser and server
+            reason = "time_up"
+    return jsonify(_close_early(session, user, pending, reason))
 
 
 @interview_bp.get("/history")
@@ -489,7 +566,7 @@ def candidate_interview_report(session_id):
 def interview_status(session_id):
     user = User.query.get_or_404(int(get_jwt_identity()))
     session = InterviewSession.query.filter_by(id=session_id, user_id=user.id).first_or_404()
-    return jsonify(session.to_dict(include_turns=True))
+    return jsonify(session.to_dict(include_turns=True, candidate_view=True))
 
 
 # ---------------------------------------------------------------------------

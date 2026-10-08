@@ -131,7 +131,11 @@ export default function InterviewSessions() {
                   <td><Link to={`/admin/interview-sessions/${s.id}`} style={{ textDecoration: 'none', color: 'inherit', fontWeight: 600 }}>{s.candidate_name}</Link></td>
                   <td style={{ fontSize: 12.5 }}>{s.jd_title}</td>
                   <td><span className="badge badge-neutral">{s.mode === 'ai' ? 'AI interview' : 'Live call'}</span></td>
-                  <td><span className={`badge ${STATUS_BADGE[s.status]}`}>{STATUS_LABEL[s.status]}</span></td>
+                  <td>
+                    <span className={`badge ${STATUS_BADGE[s.status]}`}>{STATUS_LABEL[s.status]}</span>
+                    {s.end_reason === 'candidate_exit' && <span className="badge badge-medium" style={{ marginLeft: 6 }}>Ended early</span>}
+                    {s.end_reason === 'time_up' && <span className="badge badge-medium" style={{ marginLeft: 6 }}>Time up</span>}
+                  </td>
                   <td>
                     {s.violation_count > 0 ? (
                       <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, color: 'var(--red)', fontWeight: 600, fontSize: 13 }}>

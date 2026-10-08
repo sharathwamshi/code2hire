@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Mic, MicOff, Send, Volume2, VolumeX, CheckCircle2, Info, X, LogOut, VideoOff, ShieldAlert } from 'lucide-react'
+import { Mic, MicOff, Send, Volume2, VolumeX, CheckCircle2, Info, X, VideoOff, ShieldAlert, OctagonX, Timer } from 'lucide-react'
 import client from '../../api/client'
 import { getSocket } from '../../api/socket'
 import { speak, startListening, stopSpeaking } from '../../api/speech'
@@ -63,7 +63,11 @@ export default function InterviewRoom() {
   const [exitOpen, setExitOpen] = useState(false)
   const [exiting, setExiting] = useState(false)
   const [exitError, setExitError] = useState('')
-  const [endedEarly, setEndedEarly] = useState(null) // { answered, planned } once the candidate has left
+  const [endedEarly, setEndedEarly] = useState(null) // { answered, planned, reason } once the interview ended early
+  // Interview clock: the server tells us how many seconds are left; we count down from that moment.
+  const [clock, setClock] = useState(null) // { at, secs } | null (null = no time limit)
+  const [nowTick, setNowTick] = useState(Date.now())
+  const timeUpFiredRef = useRef(false)
   const [cameraError, setCameraError] = useState('')
   const [settingUpMedia, setSettingUpMedia] = useState(false)
   const [liveViewConnected, setLiveViewConnected] = useState(false)
@@ -98,6 +102,16 @@ export default function InterviewRoom() {
   useEffect(() => { phaseRef.current = phase }, [phase])
   useEffect(() => { listeningRef.current = listening }, [listening])
   useEffect(() => { sessionRef.current = session }, [session])
+  useEffect(() => {
+    const secs = session?.remaining_seconds
+    setClock(typeof secs === 'number' ? { at: Date.now(), secs } : null)
+  }, [session?.id, session?.remaining_seconds])
+  useEffect(() => {
+    if (phase !== 'active' || !clock) return undefined
+    const t = setInterval(() => setNowTick(Date.now()), 1000)
+    return () => clearInterval(t)
+  }, [phase, clock])
+  const secondsLeft = clock ? Math.max(0, Math.ceil(clock.secs - (nowTick - clock.at) / 1000)) : null
 
   useEffect(() => {
     client.get('/candidate/interview/start-info').then(({ data }) => {
@@ -528,6 +542,11 @@ export default function InterviewRoom() {
         if (data.status === 'in_progress') {
           stopPolling()
           setPhase('resume-disclaimer')
+        } else if (data.status === 'completed') {
+          // The interviewer ended the session while it was paused.
+          stopPolling()
+          stopFaceMonitoring(); teardownLiveViewPeer()
+          setPhase('completed')
         }
       } catch (e) { /* keep polling */ }
     }, STATUS_POLL_MS)
@@ -582,11 +601,13 @@ export default function InterviewRoom() {
     setExitOpen(true)
   }
 
-  const confirmExit = async () => {
+  const confirmExit = () => endInterview('candidate_exit')
+
+  const endInterview = async (reason) => {
     if (exiting || !session) return
     setExiting(true); setExitError('')
     try {
-      const { data } = await client.post(`/candidate/interview/${session.id}/exit`, { pending_answer: answer.trim() })
+      const { data } = await client.post(`/candidate/interview/${session.id}/exit`, { pending_answer: answer.trim(), reason })
       // Mark the interview as over BEFORE leaving fullscreen, so leaving it is not read as a violation.
       phaseRef.current = 'completed'
       stopSpeaking()
@@ -597,7 +618,7 @@ export default function InterviewRoom() {
       clearTimeout(autoListenDelayRef.current)
       await finalizeRecording(session.id)
       stopCamera()
-      setEndedEarly({ answered: data.answered, planned: data.planned })
+      setEndedEarly({ answered: data.answered, planned: data.planned, reason: data.end_reason || reason })
       setExitOpen(false)
       setPhase('completed')
       if (document.fullscreenElement) document.exitFullscreen().catch(() => {})
@@ -607,6 +628,15 @@ export default function InterviewRoom() {
       setExiting(false)
     }
   }
+
+  // When the clock reaches zero the interview ends by itself, keeping whatever was typed or spoken.
+  useEffect(() => {
+    if (secondsLeft === 0 && phase === 'active' && !timeUpFiredRef.current && !exiting) {
+      timeUpFiredRef.current = true
+      setExitOpen(false)
+      endInterview('time_up')
+    }
+  })
 
   const requestStop = async () => {
     stopSpeaking()
@@ -648,6 +678,14 @@ export default function InterviewRoom() {
       }
     } catch (err) {
       if (err?.response?.status === 423) { setPhase('paused') }
+      else if (err?.response?.status === 409 && err?.response?.data?.session_status === 'completed') {
+        // The interviewer ended the interview while this answer was on its way.
+        stopListening(); stopFaceMonitoring(); teardownLiveViewPeer()
+        setEndedEarly({ answered: null, planned: null, reason: 'time_up' })
+        await finalizeRecording(session.id); stopCamera()
+        if (document.fullscreenElement) document.exitFullscreen().catch(() => {})
+        setPhase('completed')
+      }
       else { setError(err?.response?.data?.error || 'Could not submit your answer.') }
     } finally {
       setSending(false)
@@ -692,11 +730,12 @@ export default function InterviewRoom() {
       <div className="interview-shell" style={{ alignItems: 'center', justifyContent: 'center' }}>
         <div className="card" style={{ textAlign: 'center', maxWidth: 480, padding: 44 }}>
           <CheckCircle2 size={40} color="var(--green)" style={{ marginBottom: 16 }} />
-          <h2 style={{ marginBottom: 10 }}>{endedEarly ? 'Interview ended' : 'Interview complete'}</h2>
+          <h2 style={{ marginBottom: 10 }}>{endedEarly?.reason === 'time_up' ? 'Time is up' : endedEarly ? 'Interview ended' : 'Interview complete'}</h2>
           <p style={{ fontSize: 14 }}>
             {!endedEarly && 'Thanks for your time — your responses have been recorded and your admin will review the results.'}
-            {endedEarly && endedEarly.answered > 0 && `You left the interview early. The ${endedEarly.answered} answer${endedEarly.answered === 1 ? '' : 's'} you gave ${endedEarly.answered === 1 ? 'has' : 'have'} been submitted and your admin will review ${endedEarly.answered === 1 ? 'it' : 'them'}.`}
-            {endedEarly && endedEarly.answered === 0 && 'You left before answering any question, so there is nothing to review.'}
+            {endedEarly && endedEarly.reason === 'time_up' && 'Your time is up. The interview has ended and the answers you gave have been submitted. Your admin will review them.'}
+            {endedEarly && endedEarly.reason !== 'time_up' && endedEarly.answered > 0 && `You left the interview early. The ${endedEarly.answered} answer${endedEarly.answered === 1 ? '' : 's'} you gave ${endedEarly.answered === 1 ? 'has' : 'have'} been submitted and your admin will review ${endedEarly.answered === 1 ? 'it' : 'them'}.`}
+            {endedEarly && endedEarly.reason !== 'time_up' && endedEarly.answered === 0 && 'You left before answering any question, so there is nothing to review.'}
           </p>
           <Link to="/app" className="btn btn-violet" style={{ marginTop: 22, display: 'inline-flex' }}>Back to dashboard</Link>
         </div>
@@ -705,6 +744,20 @@ export default function InterviewRoom() {
   }
 
   const questionsDone = session?.turns?.filter((t) => t.role === 'candidate').length || 0
+  // Each topic is one main question plus at most ONE follow-up. The counter counts main
+  // questions only; a second AI turn on the same topic is the follow-up.
+  const followUpIds = new Set()
+  const seenTopics = new Set()
+  let mainAsked = 0
+  for (const t of session?.turns || []) {
+    if (t.role !== 'ai' || !t.topic || t.topic === 'closing') continue
+    if (seenTopics.has(t.topic)) followUpIds.add(t.id)
+    else { seenTopics.add(t.topic); mainAsked += 1 }
+  }
+  const currentIsFollowUp = (() => {
+    const last = [...(session?.turns || [])].reverse().find((t) => t.role === 'ai')
+    return !!last && followUpIds.has(last.id)
+  })()
   const unsentAnswer = answer.trim().length > 0
   const answeredForExit = questionsDone + (unsentAnswer ? 1 : 0)
   const micRingSpread = 4 + micLevel * 12
@@ -725,14 +778,28 @@ export default function InterviewRoom() {
           <div className="role-label">{jdTitle}</div>
         </div>
         <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-          <div className="interview-progress-pill">Question {Math.min(questionsDone + 1, maxQuestions)} of {maxQuestions}</div>
+          {secondsLeft !== null && (
+            <div className="interview-progress-pill" role="timer" aria-label="Time left in the interview"
+              title={`Time limit: ${session?.time_limit_minutes} minutes. The interview ends automatically when it reaches zero.`}
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontVariantNumeric: 'tabular-nums', fontWeight: 700,
+                background: secondsLeft <= 60 ? 'rgba(231,76,60,0.28)' : secondsLeft <= 300 ? 'rgba(242,154,14,0.25)' : undefined,
+                borderColor: secondsLeft <= 60 ? 'rgba(231,76,60,0.9)' : secondsLeft <= 300 ? 'rgba(242,154,14,0.85)' : undefined,
+                animation: secondsLeft <= 60 ? 'pulse 1s ease-in-out infinite' : undefined }}>
+              <Timer size={14} /> {String(Math.floor(secondsLeft / 60)).padStart(2, '0')}:{String(secondsLeft % 60).padStart(2, '0')}
+            </div>
+          )}
+          <div className="interview-progress-pill">Question {Math.min(Math.max(mainAsked, 1), maxQuestions)} of {maxQuestions}{currentIsFollowUp ? ' \u00b7 follow-up' : ''}</div>
           {config?.voice_enabled && (
             <button className="icon-btn" style={{ color: '#fff' }} onClick={() => setMuted((m) => !m)} title={muted ? 'Unmute interviewer voice' : 'Mute interviewer voice'}>
               {muted ? <VolumeX size={18} /> : <Volume2 size={18} />}
             </button>
           )}
-          <button className="exit-btn" onClick={openExit} disabled={sending} title="End the interview and submit your answers so far">
-            <LogOut size={15} /> Exit
+          <button
+            className="exit-btn" onClick={openExit} disabled={exiting}
+            style={{ background: 'rgba(231,76,60,0.2)', borderColor: 'rgba(231,76,60,0.75)', padding: '8px 16px' }}
+            title="Stop the interview and submit the answers you have given so far"
+          >
+            <OctagonX size={15} /> Stop interview
           </button>
         </div>
       </div>
@@ -752,7 +819,7 @@ export default function InterviewRoom() {
       <div className="interview-chat">
         {session?.turns?.map((t) => (
           <div key={t.id} className={`chat-bubble ${t.role}`}>
-            <span className="speaker-label">{t.role === 'ai' ? 'Interviewer' : 'You'}</span>
+            <span className="speaker-label">{t.role === 'ai' ? (followUpIds.has(t.id) ? 'Interviewer \u00b7 follow-up' : 'Interviewer') : 'You'}</span>
             {t.content}
           </div>
         ))}
@@ -783,7 +850,7 @@ export default function InterviewRoom() {
         <div className="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="exit-title" onClick={() => !exiting && setExitOpen(false)}>
           <div className="modal-panel" style={{ maxWidth: 440 }} onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
-              <h3 id="exit-title">End the interview now?</h3>
+              <h3 id="exit-title">Stop the interview now?</h3>
               <button className="icon-btn" onClick={() => setExitOpen(false)} disabled={exiting} aria-label="Close"><X size={18} /></button>
             </div>
             <p style={{ fontSize: 14, lineHeight: 1.6 }}>
@@ -797,7 +864,7 @@ export default function InterviewRoom() {
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 20 }}>
               <button className="btn btn-outline" onClick={() => setExitOpen(false)} disabled={exiting}>Keep going</button>
               <button className="btn btn-violet" onClick={confirmExit} disabled={exiting}>
-                {exiting ? <><span className="spinner" /> Ending…</> : 'End interview'}
+                {exiting ? <><span className="spinner" /> Stopping…</> : 'Stop interview'}
               </button>
             </div>
           </div>
@@ -822,6 +889,14 @@ export default function InterviewRoom() {
           />
           <button className="send-btn" onClick={() => submitAnswer()} disabled={sending || !answer.trim()} title="Send answer">
             {sending ? <span className="spinner" /> : <Send size={18} />}
+          </button>
+          <button
+            className="stop-inline-btn" onClick={openExit} disabled={exiting}
+            title="Stop the interview and submit the answers you have given so far"
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flex: 'none', padding: '0 14px', height: 44, borderRadius: 12, cursor: 'pointer',
+              font: '700 13px Inter, sans-serif', color: '#fff', background: 'rgba(231,76,60,0.85)', border: '1px solid rgba(231,76,60,1)' }}
+          >
+            <OctagonX size={16} /> Stop
           </button>
         </div>
       </div>
