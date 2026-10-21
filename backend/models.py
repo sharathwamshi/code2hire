@@ -240,7 +240,7 @@ class InterviewConfig(db.Model):
     difficulty = db.Column(db.String(10), nullable=False, default="medium")
     voice_enabled = db.Column(db.Boolean, default=True)
     voice_id = db.Column(db.String(100), nullable=True)
-    max_questions = db.Column(db.Integer, default=12)
+    max_questions = db.Column(db.Integer, default=4)
     # Overall time limit for the AI interview, in minutes. NULL = no limit.
     time_limit_minutes = db.Column(db.Integer, nullable=True)
     skill_tags = db.Column(db.JSON, nullable=True)

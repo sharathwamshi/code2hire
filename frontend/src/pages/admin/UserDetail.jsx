@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, Link, useSearchParams } from 'react-router-dom'
-import { ArrowLeft, Download, Sparkles, RotateCcw, Save, Video, Mic, Copy, Check, LinkIcon, FileCheck2, Loader2, PencilLine, KeyRound, Trash2, Plus, History, X, ExternalLink, Lock, ShieldCheck, Eye } from 'lucide-react'
+import { ArrowLeft, Download, Sparkles, RotateCcw, Save, Video, Mic, Copy, Check, LinkIcon, FileCheck2, Loader2, PencilLine, KeyRound, Trash2, Plus, History, X, ExternalLink, Lock, ShieldCheck, Eye, Mail } from 'lucide-react'
 import client from '../../api/client'
 import ReportView from '../../components/ReportView'
 import ShareReportButton from '../../components/ShareReportButton'
@@ -34,12 +34,15 @@ export default function UserDetail() {
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const [resetInfo, setResetInfo] = useState(null)
+  const [resetEmailStatus, setResetEmailStatus] = useState(null)
+  const [resetBusy, setResetBusy] = useState(false)
+  const [sendEmailBusy, setSendEmailBusy] = useState(false)
   const [form, setForm] = useState({ full_name: '', email: '', jd_id: '', training_level: 'medium', active_stage: 'prepare' })
 
   const [interviewConfig, setInterviewConfig] = useState(null)
   const [azureVoices, setAzureVoices] = useState([])
   const [icForm, setIcForm] = useState({
-    mode: 'ai', difficulty: 'medium', voice_enabled: true, voice_id: '', max_questions: 12, time_limit_minutes: '',
+    mode: 'ai', difficulty: 'medium', voice_enabled: true, voice_id: '', max_questions: 4, time_limit_minutes: '',
     violation_threshold: 1, require_fullscreen: true, interviewer_name: '', attempts_allowed: 1,
   })
   const [icSaving, setIcSaving] = useState(false)
@@ -163,9 +166,14 @@ export default function UserDetail() {
     client.get(`/admin/users/${id}/interview-config`).then((r) => {
       if (r.data) {
         setInterviewConfig(r.data)
+        const maxQuestions = Number(r.data.max_questions)
+        const timeLimit = Number(r.data.time_limit_minutes)
         setIcForm({
           mode: r.data.mode, difficulty: r.data.difficulty, voice_enabled: r.data.voice_enabled,
-          voice_id: r.data.voice_id || '', max_questions: r.data.max_questions, time_limit_minutes: r.data.time_limit_minutes || '', violation_threshold: r.data.violation_threshold,
+          voice_id: r.data.voice_id || '',
+          max_questions: Number.isInteger(maxQuestions) && maxQuestions >= 4 && maxQuestions <= 30 ? maxQuestions : 4,
+          time_limit_minutes: Number.isInteger(timeLimit) && timeLimit >= 5 && timeLimit <= 240 ? timeLimit : '',
+          violation_threshold: r.data.violation_threshold,
           require_fullscreen: r.data.require_fullscreen, interviewer_name: r.data.interviewer_name || '',
           attempts_allowed: r.data.attempts_allowed || 1,
         })
@@ -243,11 +251,45 @@ export default function UserDetail() {
 
   const resetPassword = async () => {
     if (!confirm('Generate a new password for this candidate?')) return
-    const { data } = await client.put(`/admin/users/${id}`, { reset_password: true })
-    setResetInfo(data.generated_password)
+    setResetBusy(true); setError(''); setNotice(''); setResetEmailStatus(null)
+    try {
+      const { data } = await client.put(`/admin/users/${id}`, { reset_password: true })
+      setResetInfo(data.generated_password)
+      setResetEmailStatus(null)
+      setNotice('Password reset. The candidate must change it after signing in.')
+    } catch (err) {
+      setError(err?.response?.data?.error || 'Could not reset the candidate password.')
+    } finally { setResetBusy(false) }
+  }
+
+  const sendResetCredentials = async () => {
+    setSendEmailBusy(true); setError(''); setNotice(''); setResetEmailStatus(null)
+    try {
+      const { data } = await client.post(`/admin/users/${id}/send-credentials`, { password: resetInfo })
+      setResetEmailStatus(data.credential_email)
+    } catch (err) {
+      setResetEmailStatus(err?.response?.data?.credential_email || {
+        status: 'failed',
+        message: err?.response?.data?.error || 'Could not send credential email.',
+      })
+    } finally { setSendEmailBusy(false) }
   }
 
   const saveInterviewConfig = async (extra = {}) => {
+    if (icForm.mode === 'ai') {
+      const maxQuestions = Number(icForm.max_questions)
+      const timeLimit = icForm.time_limit_minutes === '' ? null : Number(icForm.time_limit_minutes)
+      if (!Number.isInteger(maxQuestions) || maxQuestions < 4 || maxQuestions > 30) {
+        setError('Max questions must be a positive whole number between 4 and 30.')
+        setNotice('')
+        return
+      }
+      if (timeLimit !== null && (!Number.isInteger(timeLimit) || timeLimit < 5 || timeLimit > 240)) {
+        setError('Time limit must be a positive whole number between 5 and 240 minutes, or left blank for no limit.')
+        setNotice('')
+        return
+      }
+    }
     setIcSaving(true); setError(''); setNotice('')
     try {
       const { data } = await client.post(`/admin/users/${id}/interview-config`, { ...icForm, ...extra })
@@ -445,7 +487,12 @@ export default function UserDetail() {
           ) : (
             <p style={{ fontSize: 11.5, color: 'var(--ink-faint)', marginBottom: 12 }}>Passwords are encrypted and can't be viewed later — reset to issue a new one.</p>
           )}
-          <button className="btn btn-outline btn-sm" onClick={resetPassword}><RotateCcw size={14} /> Reset password</button>
+          {resetEmailStatus && <div className={`banner ${resetEmailStatus.status === 'sent' ? 'banner-success' : 'banner-warning'}`} style={{ marginBottom: 12 }}>{resetEmailStatus.message}</div>}
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <button className="btn btn-outline btn-sm" onClick={resetPassword} disabled={resetBusy || sendEmailBusy}><RotateCcw size={14} /> {resetBusy ? 'Resetting…' : 'Reset password'}</button>
+            {resetInfo && <button className="btn btn-violet btn-sm" onClick={sendResetCredentials} disabled={sendEmailBusy || resetBusy || !user.email}><Mail size={14} /> {sendEmailBusy ? 'Sending…' : 'Send credentials by email'}</button>}
+          </div>
+          {resetInfo && !user.email && <p style={{ fontSize: 11.5, color: 'var(--ink-faint)', marginTop: 8 }}>Add and save an email address in the profile before sending credentials.</p>}
         </div>
               </div>
       <div className="card" style={{ marginBottom: 20 }}>
@@ -517,7 +564,12 @@ export default function UserDetail() {
           ) : (
             <p style={{ fontSize: 11.5, color: 'var(--ink-faint)', marginBottom: 12 }}>Passwords are encrypted and can't be viewed later — reset to issue a new one.</p>
           )}
-          <button className="btn btn-outline btn-sm" onClick={resetPassword}><RotateCcw size={14} /> Reset password</button>
+          {resetEmailStatus && <div className={`banner ${resetEmailStatus.status === 'sent' ? 'banner-success' : 'banner-warning'}`} style={{ marginBottom: 12 }}>{resetEmailStatus.message}</div>}
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <button className="btn btn-outline btn-sm" onClick={resetPassword} disabled={resetBusy || sendEmailBusy}><RotateCcw size={14} /> {resetBusy ? 'Resetting…' : 'Reset password'}</button>
+            {resetInfo && <button className="btn btn-violet btn-sm" onClick={sendResetCredentials} disabled={sendEmailBusy || resetBusy || !user.email}><Mail size={14} /> {sendEmailBusy ? 'Sending…' : 'Send credentials by email'}</button>}
+          </div>
+          {resetInfo && !user.email && <p style={{ fontSize: 11.5, color: 'var(--ink-faint)', marginTop: 8 }}>Add and save an email address in the profile before sending credentials.</p>}
         </div>
               </div>
             </>
@@ -555,10 +607,13 @@ export default function UserDetail() {
           {icForm.mode === 'ai' && (
             <>
               <div className="field"><label>Max questions</label>
-                <input className="input" type="number" min={4} max={30} value={icForm.max_questions} onChange={(e) => setIcForm({ ...icForm, max_questions: Number(e.target.value) })} />
+                <input className="input" type="text" inputMode="numeric" pattern="[0-9]*" maxLength={2} value={icForm.max_questions} onChange={(e) => { const value = e.target.value; if (/^\d*$/.test(value)) setIcForm({ ...icForm, max_questions: value }) }} />
               </div>
               <div className="field"><label>Time limit (minutes)</label>
-                <input className="input" type="number" min={5} max={240} placeholder="No limit" value={icForm.time_limit_minutes} onChange={(e) => setIcForm({ ...icForm, time_limit_minutes: e.target.value })} />
+                <select className="input" value={icForm.time_limit_minutes} onChange={(e) => setIcForm({ ...icForm, time_limit_minutes: e.target.value })}>
+                  <option value="">No limit</option>
+                  {Array.from({ length: 48 }, (_, i) => (i + 1) * 5).map((minutes) => <option key={minutes} value={minutes}>{minutes} minutes</option>)}
+                </select>
                 <small style={{ color: 'var(--ink-faint)' }}>Shown as a countdown to the candidate. The interview ends when it reaches zero. Leave empty for no limit.</small>
               </div>
               <div className="field"><label>Voice</label>

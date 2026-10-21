@@ -1,17 +1,15 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { X, ArrowLeft, ArrowRight, Copy, Check, Upload, Sparkles, CheckCircle2 } from 'lucide-react'
+import { X, ArrowLeft, ArrowRight, Copy, Check, Upload, Sparkles, CheckCircle2, Mail } from 'lucide-react'
 import client from '../api/client'
 import { inviteText } from './stages'
 import '../styles/shared.css'
 import '../styles/hub.css'
 
 const blank = {
-  jd_id: '', full_name: '', email: '', username: '', resume_text: '',
-  track: 'interview', mode: 'ai', difficulty: 'medium', voice_enabled: true, max_questions: 12, time_limit_minutes: '', require_fullscreen: true,
+  jd_id: '', full_name: '', email: '', resume_text: '',
+  track: 'interview', mode: 'ai', difficulty: 'medium', voice_enabled: true, max_questions: 4, time_limit_minutes: '', require_fullscreen: true,
 }
-
-const slug = (s) => (s || '').toLowerCase().replace(/[^a-z0-9]+/g, '.').replace(/^\.+|\.+$/g, '')
 
 /**
  * Add a candidate in three short steps - Who -> What -> Review & create - always inside a role.
@@ -23,16 +21,17 @@ export default function AddCandidateWizard({ open, roles, presetRoleId, onClose,
   const [f, setF] = useState(blank)
   const [file, setFile] = useState(null)
   const [advanced, setAdvanced] = useState(false)
-  const [usernameTouched, setUsernameTouched] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [result, setResult] = useState(null)
   const [copied, setCopied] = useState(false)
+  const [emailBusy, setEmailBusy] = useState(false)
+  const [emailStatus, setEmailStatus] = useState(null)
 
   useEffect(() => {
     if (open) {
       setStep(1); setF({ ...blank, jd_id: presetRoleId ? String(presetRoleId) : '' }); setFile(null)
-      setAdvanced(false); setUsernameTouched(false); setBusy(false); setError(''); setResult(null); setCopied(false)
+      setAdvanced(false); setBusy(false); setError(''); setResult(null); setCopied(false); setEmailBusy(false); setEmailStatus(null)
     }
   }, [open, presetRoleId])
 
@@ -41,42 +40,62 @@ export default function AddCandidateWizard({ open, roles, presetRoleId, onClose,
 
   if (!open) return null
 
-  const onName = (v) => set({ full_name: v, ...(usernameTouched ? {} : { username: slug(f.email.split('@')[0]) || slug(v) }) })
-  const onEmail = (v) => set({ email: v, ...(usernameTouched ? {} : { username: slug(v.split('@')[0]) || slug(f.full_name) }) })
+  const onName = (v) => set({ full_name: v })
+  const onEmail = (v) => set({ email: v })
 
-  const step1Ok = f.jd_id && f.full_name.trim() && f.username.trim()
+  const emailValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(f.email.trim())
+  const step1Ok = f.jd_id && f.full_name.trim() && emailValid
   const hasResume = !!file || !!f.resume_text.trim()
   const real = f.track === 'interview'
 
   const next = () => {
     setError('')
-    if (step === 1 && !step1Ok) { setError('Pick a role and enter the candidate\'s name and username.'); return }
+    if (step === 1 && !f.jd_id) { setError('Choose the role the candidate is applying for.'); return }
+    if (step === 1 && !f.full_name.trim()) { setError('Candidate name is required.'); return }
+    if (step === 1 && !f.email.trim()) { setError('Email is required.'); return }
+    if (step === 1 && !emailValid) { setError('Enter a valid email address.'); return }
+    if (step === 1 && !hasResume) { setError('Resume is required. Upload a resume file or paste the resume text before continuing.'); return }
+    if (step === 2 && real && f.mode === 'ai') {
+      const maxQuestions = Number(f.max_questions)
+      const timeLimit = f.time_limit_minutes === '' ? null : Number(f.time_limit_minutes)
+      if (!Number.isInteger(maxQuestions) || maxQuestions < 4 || maxQuestions > 30) {
+        setError('Max questions must be a positive whole number between 4 and 30.')
+        return
+      }
+      if (timeLimit !== null && (!Number.isInteger(timeLimit) || timeLimit < 5 || timeLimit > 240)) {
+        setError('Time limit must be a positive whole number between 5 and 240 minutes, or left blank for no limit.')
+        return
+      }
+    }
     setStep((s) => s + 1)
   }
 
   const create = async () => {
-    setBusy(true); setError('')
+    if (!step1Ok || !hasResume) {
+      setStep(1)
+      setError(!hasResume ? 'Resume is required. Upload a resume file or paste the resume text before continuing.' : 'Enter the candidate name and a valid email address.')
+      return
+    }
+    setBusy(true); setError(''); setEmailStatus(null)
     const notes = []
     try {
-      const { data } = await client.post('/admin/users', {
-        username: f.username.trim(), full_name: f.full_name.trim(), email: f.email.trim() || null,
-        jd_id: Number(f.jd_id), training_level: f.difficulty, resume_text: f.resume_text.trim() || null, track: f.track,
-      })
+      const payload = new FormData()
+      payload.append('full_name', f.full_name.trim())
+      payload.append('email', f.email.trim())
+      payload.append('jd_id', String(Number(f.jd_id)))
+      payload.append('training_level', f.difficulty)
+      payload.append('track', f.track)
+      if (file) payload.append('file', file)
+      else payload.append('resume_text', f.resume_text.trim())
+      const { data } = await client.post('/admin/users', payload)
       const user = data.user
       const password = data.generated_password
-
-      if (file) {
-        try {
-          const fd = new FormData(); fd.append('file', file)
-          await client.post(`/admin/users/${user.id}/resume`, fd, { headers: { 'Content-Type': 'multipart/form-data' } })
-        } catch (err) { notes.push(err?.response?.data?.error || 'The resume file could not be read - add it on the candidate page.') }
-      }
 
       let questionsStarted = false
       if (real) {
         try {
           await client.post(`/admin/users/${user.id}/interview-config`, {
-            mode: f.mode, difficulty: f.difficulty, voice_enabled: f.voice_enabled, max_questions: Number(f.max_questions) || 12, time_limit_minutes: f.mode === 'ai' && Number(f.time_limit_minutes) ? Number(f.time_limit_minutes) : null,
+            mode: f.mode, difficulty: f.difficulty, voice_enabled: f.voice_enabled, max_questions: Number(f.max_questions) || 4, time_limit_minutes: f.mode === 'ai' && Number(f.time_limit_minutes) ? Number(f.time_limit_minutes) : null,
             require_fullscreen: f.require_fullscreen, generate_link: f.mode === 'live', link_valid_days: 3,
           })
         } catch (err) { notes.push(err?.response?.data?.error || 'Interview settings were not saved - set them on the candidate page.') }
@@ -104,6 +123,18 @@ export default function AddCandidateWizard({ open, roles, presetRoleId, onClose,
   const copyInvite = async () => {
     try { await navigator.clipboard.writeText(inviteText(cardForInvite, { password: result.password })); setCopied(true); setTimeout(() => setCopied(false), 1800) } catch { /* blocked */ }
   }
+  const sendCredentials = async () => {
+    setEmailBusy(true); setEmailStatus(null); setError('')
+    try {
+      const { data } = await client.post(`/admin/users/${result.user.id}/send-credentials`, { password: result.password })
+      setEmailStatus(data.credential_email)
+    } catch (err) {
+      setEmailStatus(err?.response?.data?.credential_email || {
+        status: 'failed',
+        message: err?.response?.data?.error || 'Could not send credential email.',
+      })
+    } finally { setEmailBusy(false) }
+  }
 
   return (
     <div className="modal-overlay" onClick={busy ? undefined : onClose}>
@@ -129,12 +160,12 @@ export default function AddCandidateWizard({ open, roles, presetRoleId, onClose,
               {(!roles || roles.length === 0) && <p style={{ fontSize: 12, marginTop: 6, color: 'var(--red)' }}>Create a role first - every candidate belongs to one.</p>}
             </div>
             <div className="form-grid">
-              <div className="field"><label>Full name</label><input className="input" value={f.full_name} onChange={(e) => onName(e.target.value)} placeholder="e.g. Priya Sharma" autoFocus={!!presetRoleId} /></div>
-              <div className="field"><label>Email (optional)</label><input className="input" type="email" value={f.email} onChange={(e) => onEmail(e.target.value)} placeholder="priya@example.com" /></div>
-              <div className="field"><label>Username</label><input className="input" value={f.username} onChange={(e) => { setUsernameTouched(true); set({ username: e.target.value }) }} placeholder="priya.sharma" /></div>
+              <div className="field"><label>Full name <span aria-hidden="true">*</span></label><input className="input" value={f.full_name} onChange={(e) => onName(e.target.value)} placeholder="e.g. Priya Sharma" autoFocus={!!presetRoleId} required /></div>
+              <div className="field"><label>Email <span aria-hidden="true">*</span></label><input className="input" type="email" value={f.email} onChange={(e) => onEmail(e.target.value)} placeholder="priya@example.com" required /></div>
+              <div className="field"><label>Username (same as email)</label><input className="input" value={f.email} readOnly /></div>
             </div>
             <div className="field">
-              <label>Resume</label>
+              <label>Resume <span aria-hidden="true">*</span></label>
               <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 8 }}>
                 <label className="btn btn-outline btn-sm" style={{ cursor: 'pointer' }}>
                   <Upload size={14} /> {file ? 'Change file' : 'Upload PDF / Word / text'}
@@ -144,7 +175,7 @@ export default function AddCandidateWizard({ open, roles, presetRoleId, onClose,
                 <span style={{ fontSize: 12, color: 'var(--ink-faint)' }}>or paste below</span>
               </div>
               <textarea className="input" rows={5} value={f.resume_text} disabled={!!file} onChange={(e) => set({ resume_text: e.target.value })} placeholder="Paste the resume text (skills, experience...). It is searchable and drives the interview questions." />
-              <p style={{ fontSize: 11.5, marginTop: 6, color: 'var(--ink-faint)' }}>You can add the resume later, but a real interview needs it before questions can be generated.</p>
+              <p style={{ fontSize: 11.5, marginTop: 6, color: 'var(--ink-faint)' }}>Upload a file or paste resume text to continue.</p>
             </div>
           </div>
         )}
@@ -181,8 +212,8 @@ export default function AddCandidateWizard({ open, roles, presetRoleId, onClose,
                 <button type="button" className="btn btn-ghost btn-sm" style={{ justifySelf: 'start' }} onClick={() => setAdvanced((a) => !a)}>{advanced ? 'Hide' : 'Show'} advanced options</button>
                 {advanced && (
                   <div className="form-grid">
-                    {f.mode === 'ai' && <div className="field"><label>Max questions</label><input className="input" type="number" min={4} max={30} value={f.max_questions} onChange={(e) => set({ max_questions: e.target.value })} /></div>}
-                    {f.mode === 'ai' && <div className="field"><label>Time limit (minutes)</label><input className="input" type="number" min={5} max={240} placeholder="No limit" value={f.time_limit_minutes} onChange={(e) => set({ time_limit_minutes: e.target.value })} /><small style={{ color: 'var(--ink-faint)' }}>A countdown runs for the candidate and the interview ends when it hits zero. Leave empty for no limit.</small></div>}
+                    {f.mode === 'ai' && <div className="field"><label>Max questions</label><input className="input" type="text" inputMode="numeric" pattern="[0-9]*" maxLength={2} value={f.max_questions} onChange={(e) => { const value = e.target.value; if (/^\d*$/.test(value)) set({ max_questions: value }) }} /></div>}
+                    {f.mode === 'ai' && <div className="field"><label>Time limit (minutes)</label><select className="input" value={f.time_limit_minutes} onChange={(e) => set({ time_limit_minutes: e.target.value })}><option value="">No limit</option>{Array.from({ length: 48 }, (_, i) => (i + 1) * 5).map((minutes) => <option key={minutes} value={minutes}>{minutes} minutes</option>)}</select><small style={{ color: 'var(--ink-faint)' }}>A countdown runs for the candidate and the interview ends when it hits zero.</small></div>}
                     {f.mode === 'ai' && <div className="field"><label>Voice</label><select className="input" value={f.voice_enabled ? 'on' : 'off'} onChange={(e) => set({ voice_enabled: e.target.value === 'on' })}><option value="on">Spoken questions</option><option value="off">Text only</option></select></div>}
                     <div className="field"><label>Fullscreen required</label><select className="input" value={f.require_fullscreen ? 'yes' : 'no'} onChange={(e) => set({ require_fullscreen: e.target.value === 'yes' })}><option value="yes">Yes</option><option value="no">No</option></select></div>
                   </div>
@@ -199,7 +230,7 @@ export default function AddCandidateWizard({ open, roles, presetRoleId, onClose,
         {!result && step === 3 && (
           <div style={{ display: 'grid', gap: 14 }}>
             <div className="card" style={{ background: 'var(--violet-050)' }}>
-              <div className="readiness-row"><span>Candidate</span><span className="readiness-value">{f.full_name} (@{f.username})</span></div>
+              <div className="readiness-row"><span>Candidate</span><span className="readiness-value">{f.full_name} (@{f.email})</span></div>
               <div className="readiness-row"><span>Role</span><span className="readiness-value">{role?.title}</span></div>
               <div className="readiness-row"><span>Type</span><span className="readiness-value">{real ? `Real interview - ${f.mode === 'ai' ? 'AI interviewer' : 'live call'}, ${f.difficulty}` : 'Practice'}</span></div>
               <div className="readiness-row"><span className={`readiness-dot ${hasResume ? 'done' : 'warn'}`} /><span>Resume</span><span className="readiness-value">{hasResume ? (file ? file.name : 'Pasted text') : 'Not added yet'}</span></div>
@@ -227,15 +258,18 @@ export default function AddCandidateWizard({ open, roles, presetRoleId, onClose,
               <strong style={{ fontSize: 15 }}>{result.user.full_name || result.user.username} was added to {role?.title}.</strong>
             </div>
             {result.notes.map((n, i) => <div key={i} className="banner banner-warning" style={{ marginBottom: 0 }}>{n}</div>)}
+            {emailStatus && <div className={`banner ${emailStatus.status === 'sent' ? 'banner-success' : 'banner-warning'}`} style={{ marginBottom: 0 }}>{emailStatus.message}</div>}
             <div className="invite-box">{inviteText(cardForInvite, { password: result.password })}</div>
             <p style={{ fontSize: 11.5, color: 'var(--ink-faint)' }}>The password is shown only now - it is stored encrypted and cannot be looked up later (you can always reset it).</p>
             <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
               <button className="btn btn-violet" onClick={copyInvite}>{copied ? <><Check size={15} /> Copied</> : <><Copy size={15} /> Copy invite message</>}</button>
+              <button className="btn btn-outline" onClick={sendCredentials} disabled={emailBusy || !result.user.email}><Mail size={15} /> {emailBusy ? 'Sending…' : 'Send credentials by email'}</button>
               {result.questionsStarted
                 ? <Link className="btn btn-ghost" to={`/admin/users/${result.user.id}?step=questions`} onClick={onClose}><Sparkles size={15} /> Review the questions</Link>
                 : <Link className="btn btn-ghost" to={`/admin/users/${result.user.id}`} onClick={onClose}>Open candidate</Link>}
-              <button className="btn btn-outline" onClick={() => { setStep(1); setF({ ...blank, jd_id: f.jd_id }); setFile(null); setResult(null); setUsernameTouched(false) }}>Add another</button>
+              <button className="btn btn-outline" onClick={() => { setStep(1); setF({ ...blank, jd_id: f.jd_id }); setFile(null); setResult(null); setEmailStatus(null); setCopied(false) }}>Add another</button>
             </div>
+            {!result.user.email && <p style={{ fontSize: 11.5, color: 'var(--ink-faint)' }}>Add an email address to the candidate profile before sending credentials.</p>}
           </div>
         )}
 

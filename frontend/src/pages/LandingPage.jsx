@@ -1,10 +1,13 @@
-import { useEffect, useRef, useState } from 'react'
+import { lazy, Suspense, useEffect, useRef, useState } from 'react'
+import { AnimatePresence, LazyMotion, domAnimation, m as motion, useMotionValue, useReducedMotion, useScroll, useSpring, useTransform } from 'framer-motion'
 import {
   ChevronDown, Video, ShieldCheck, Sparkles, FileText, Mic, Lock, Check, ArrowRight,
   UserPlus, ListChecks, PlayCircle, ClipboardCheck, Send, Eye, Target, Menu, X,
 } from 'lucide-react'
 import LoginModal from '../components/LoginModal'
 import './LandingPage.css'
+
+const LandingScene = lazy(() => import('../components/LandingScene'))
 
 /* ------------------------------------------------------------------ content */
 
@@ -92,22 +95,48 @@ const FAQS = [
   { q: 'What happens if the AI service is briefly down mid-interview?', a: 'The candidate never sees a stall: if a live follow-up call fails or times out, the system falls back to the pre-approved question for that topic.' },
 ]
 
-/* -------------------------------------------------------------------- hooks */
+/* -------------------------------------------------------- motion primitives */
 
-function useReveal() {
-  const ref = useRef(null)
-  useEffect(() => {
-    const root = ref.current
-    if (!root) return
-    const nodes = root.querySelectorAll('.rv')
-    if (typeof IntersectionObserver === 'undefined') { nodes.forEach((n) => n.classList.add('in')); return }
-    const io = new IntersectionObserver((entries) => {
-      entries.forEach((e) => { if (e.isIntersecting) { e.target.classList.add('in'); io.unobserve(e.target) } })
-    }, { threshold: 0.15, rootMargin: '0px 0px -6% 0px' })
-    nodes.forEach((n) => io.observe(n))
-    return () => io.disconnect()
-  })
-  return ref
+function Reveal({ as = 'div', delay = 0, className, fromLeft = false, fromRight = false, interactive = false, children, ...props }) {
+  const reduceMotion = useReducedMotion()
+  const Element = motion[as] || motion.div
+  const fromSide = fromRight ? 1 : -1
+  const hasDirectionalEntry = fromLeft || fromRight
+  const pointerX = useMotionValue(0)
+  const pointerY = useMotionValue(0)
+  const rotateX = useSpring(pointerY, { stiffness: 180, damping: 22, mass: 0.45 })
+  const rotateY = useSpring(pointerX, { stiffness: 180, damping: 22, mass: 0.45 })
+  const handlePointerMove = (event) => {
+    if (!interactive || reduceMotion || event.pointerType !== 'mouse') return
+    const bounds = event.currentTarget.getBoundingClientRect()
+    const x = (event.clientX - bounds.left) / bounds.width
+    const y = (event.clientY - bounds.top) / bounds.height
+    pointerX.set((x - 0.5) * 8)
+    pointerY.set((0.5 - y) * 6)
+  }
+  const resetPointerTilt = () => {
+    pointerX.set(0)
+    pointerY.set(0)
+  }
+  return (
+    <Element
+      className={className}
+      initial={reduceMotion ? false : hasDirectionalEntry ? { opacity: 0, x: fromSide * 52, y: -38, rotateY: fromSide * 8, rotateZ: fromSide * -1, scale: 0.95, filter: 'blur(4px)' } : { opacity: 0, y: -32 }}
+      whileInView={{ opacity: 1, x: 0, y: 0, rotateY: 0, rotateZ: 0, scale: 1, filter: 'blur(0px)' }}
+      viewport={{ once: true, amount: 0.15 }}
+      transition={reduceMotion
+        ? { duration: 0 }
+        : hasDirectionalEntry
+          ? { type: 'spring', stiffness: 170, damping: 19, mass: 0.7, delay }
+          : { type: 'spring', stiffness: 150, damping: 20, mass: 0.7, delay }}
+      style={interactive && !reduceMotion ? { rotateX, rotateY, transformPerspective: 1000, transformStyle: 'preserve-3d' } : undefined}
+      onPointerMove={handlePointerMove}
+      onPointerLeave={resetPointerTilt}
+      {...props}
+    >
+      {children}
+    </Element>
+  )
 }
 
 function useCountUp(target, active, ms = 1400) {
@@ -314,7 +343,18 @@ export default function LandingPage() {
   const [role, setRole] = useState(0)
   const [menu, setMenu] = useState(false)
   const [scrolled, setScrolled] = useState(false)
-  const rootRef = useReveal()
+  const heroRef = useRef(null)
+  const reduceMotion = useReducedMotion()
+  const { scrollYProgress } = useScroll()
+  const scrollProgress = useSpring(scrollYProgress, { stiffness: 120, damping: 30, restDelta: 0.001 })
+  const { scrollYProgress: heroProgress } = useScroll({
+    target: heroRef,
+    offset: ['start start', 'end start'],
+  })
+  const smoothHeroProgress = useSpring(heroProgress, { stiffness: 90, damping: 28, restDelta: 0.001 })
+  const heroSceneY = useTransform(smoothHeroProgress, [0, 1], [0, 105])
+  const heroSceneOpacity = useTransform(smoothHeroProgress, [0, 0.85], [0.75, 0.18])
+  const heroSceneScale = useTransform(smoothHeroProgress, [0, 1], [1, 1.08])
   const isHiring = persona === 'recruiter'
   const steps = JOURNEY[persona]
   const login = () => { setMenu(false); setLoginOpen(true) }
@@ -334,8 +374,15 @@ export default function LandingPage() {
   )
 
   return (
-    <div className="lp" ref={rootRef}>
-      <header className={`lp-nav ${scrolled ? 'scrolled' : ''}`}>
+    <LazyMotion features={domAnimation}>
+    <div className="lp">
+      {!reduceMotion && <motion.div className="lp-scroll-progress" style={{ scaleX: scrollProgress }} aria-hidden="true" />}
+      <motion.header
+        className={`lp-nav ${scrolled ? 'scrolled' : ''}`}
+        initial={reduceMotion ? false : { opacity: 0, y: -18 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: reduceMotion ? 0 : 0.55, ease: [0.22, 1, 0.36, 1] }}
+      >
         <a href="#top" className="lp-brand">
           <span className="lp-mark">C2</span>
           <span className="lp-brand-txt"><b>Code2Hire</b><small>Powered by Acknowledger First</small></span>
@@ -350,25 +397,43 @@ export default function LandingPage() {
         </nav>
         <button className="lp-btn ghost lp-nav-login" onClick={login}>Login</button>
         <button className="lp-burger" onClick={() => setMenu((m) => !m)} aria-label="Menu">{menu ? <X size={20} /> : <Menu size={20} />}</button>
-      </header>
+      </motion.header>
 
-      <section className="lp-hero" id="top">
+      <section className="lp-hero" id="top" ref={heroRef}>
         <div className="lp-aurora" aria-hidden="true"><i className="a1" /><i className="a2" /><i className="a3" /><i className="a4" /></div>
         <div className="lp-grid" aria-hidden="true" />
+        {!reduceMotion && (
+          <motion.div className="lp-scene-parallax" style={{ y: heroSceneY, opacity: heroSceneOpacity, scale: heroSceneScale }} aria-hidden="true">
+            <Suspense fallback={null}>
+              <LandingScene reducedMotion={false} />
+            </Suspense>
+          </motion.div>
+        )}
         <div className="lp-hero-inner">
-          <div className="lp-hero-copy">
+          <motion.div
+            className="lp-hero-copy"
+            initial={reduceMotion ? false : { opacity: 0, x: -28 }}
+            animate={{ opacity: 1, x: 0 }}
+            transition={{ duration: reduceMotion ? 0 : 0.7, delay: reduceMotion ? 0 : 0.08, ease: [0.22, 1, 0.36, 1] }}
+          >
             <Toggle />
             <span className="lp-eyebrow"><i /> {isHiring ? 'Interview, review and report in one flow' : 'Practice first, then interview with clear rules'}</span>
-            <h1 key={persona} className="lp-h1">
+            <motion.h1
+              key={persona}
+              className="lp-h1"
+              initial={reduceMotion ? false : { opacity: 0, y: 15 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: reduceMotion ? 0 : 0.45 }}
+            >
               {isHiring ? <>Hire on proof,<br /><span className="grad">not on a hunch.</span></> : <>Practice it.<br /><span className="grad">Then prove it.</span></>}
-            </h1>
+            </motion.h1>
             <p className="lp-lead">
               {isHiring
                 ? 'Run resume-matched interviews, watch them live, and make every decision through a mandatory human review. Candidates see a report only when you share it.'
                 : 'Rehearse against your own resume and the real job description, then take a fair, clearly monitored interview. See your results once your interviewer shares them.'}
             </p>
             <div className="lp-actions">
-              <button className="lp-btn primary lg" onClick={login}>Login to your account <ArrowRight size={18} /></button>
+              <motion.button className="lp-btn primary lg" onClick={login} whileHover={reduceMotion ? undefined : { y: -2, scale: 1.02 }} whileTap={reduceMotion ? undefined : { scale: 0.98 }}>Login to your account <ArrowRight size={18} /></motion.button>
               <a href="#journey" className="lp-btn ghost lg">See how it works</a>
             </div>
             <ul className="lp-checks">
@@ -376,8 +441,14 @@ export default function LandingPage() {
               <li><Check size={14} /> Live monitoring</li>
               <li><Check size={14} /> Human review gate</li>
             </ul>
-          </div>
-          <InterviewMock />
+          </motion.div>
+          <motion.div
+            initial={reduceMotion ? false : { opacity: 0, x: 28, scale: 0.98 }}
+            animate={{ opacity: 1, x: 0, scale: 1 }}
+            transition={{ duration: reduceMotion ? 0 : 0.75, delay: reduceMotion ? 0 : 0.15, ease: [0.22, 1, 0.36, 1] }}
+          >
+            <InterviewMock />
+          </motion.div>
         </div>
         <div className="lp-powered-hero">Powered by <b>Acknowledger First</b></div>
       </section>
@@ -393,22 +464,22 @@ export default function LandingPage() {
       </div>
 
       <section id="journey" className="lp-sec">
-        <div className="lp-sec-head rv">
+        <Reveal className="lp-sec-head">
           <span className="lp-kicker pink">The journey</span>
           <h2>{isHiring ? 'From job description to a decision you can defend' : 'From invite to results, nothing is a surprise'}</h2>
           <Toggle className="lp-toggle-light" />
-        </div>
+        </Reveal>
         <ol className={`lp-path n${steps.length}`}>
           {steps.map((s, i) => {
             const Icon = s.icon
             return (
-              <li key={persona + s.title} className={`lp-step rv ${s.color}`} style={{ transitionDelay: `${i * 90}ms` }}>
+              <Reveal as="li" key={persona + s.title} className={`lp-step ${s.color}`} fromLeft={i % 2 === 0} fromRight={i % 2 !== 0} interactive delay={i * 0.075} whileHover={reduceMotion ? undefined : { y: -10, scale: 1.03 }}>
                 <span className="lp-step-n">{i + 1}</span>
                 <span className="lp-step-ic"><Icon size={22} /></span>
                 {s.gate && <span className="lp-gate"><Lock size={11} /> {s.gate}</span>}
                 <h3>{s.title}</h3>
                 <p>{s.body}</p>
-              </li>
+              </Reveal>
             )
           })}
         </ol>
@@ -416,7 +487,7 @@ export default function LandingPage() {
 
       <section id="report" className="lp-sec lp-sec-dark">
         <div className="lp-split">
-          <div className="lp-split-copy rv">
+          <Reveal className="lp-split-copy">
             <span className="lp-kicker cyan">The report</span>
             <h2>Scores you can read at a glance. Decisions that are recorded.</h2>
             <p>Every interview ends in a scored report with strengths, gaps and the integrity log. A recruiter records a verdict before anything moves forward, so the outcome is always on file.</p>
@@ -426,99 +497,110 @@ export default function LandingPage() {
               <li><Check size={16} /> Compare candidates side by side inside a role</li>
               <li><Check size={16} /> Export the whole role as a spreadsheet</li>
             </ul>
-          </div>
-          <div className="rv"><ReportCard /></div>
+          </Reveal>
+          <Reveal fromLeft interactive whileHover={reduceMotion ? undefined : { y: -8, scale: 1.015 }}><ReportCard /></Reveal>
         </div>
       </section>
 
       <section className="lp-sec">
-        <div className="lp-sec-head rv">
+        <Reveal className="lp-sec-head">
           <span className="lp-kicker violet">{isHiring ? 'For hiring teams' : 'For candidates'}</span>
           <h2>{isHiring ? 'Everything a recruiter needs, nothing they do not' : 'Built so you walk in ready'}</h2>
-        </div>
+        </Reveal>
         <div className="lp-feat-grid">
           {FEATURES[persona].map(({ icon: Icon, color, title, body }, i) => (
-            <article key={persona + title} className={`lp-feat rv ${color}`} style={{ transitionDelay: `${i * 80}ms` }}>
+            <Reveal as="article" key={persona + title} className={`lp-feat ${color}`} fromLeft={i % 2 === 0} fromRight={i % 2 !== 0} interactive delay={i * 0.075} whileHover={reduceMotion ? undefined : { y: -10, scale: 1.03 }}>
               <span className="lp-feat-ic"><Icon size={22} /></span>
               <h3>{title}</h3>
               <p>{body}</p>
-            </article>
+            </Reveal>
           ))}
         </div>
       </section>
 
       <section id="roles" className="lp-sec lp-sec-tint">
-        <div className="lp-sec-head rv">
+        <Reveal className="lp-sec-head">
           <span className="lp-kicker amber">Every role</span>
           <h2>Not just for developers</h2>
           <p className="lp-sub">Pick a role to see the kind of question it starts with.</p>
-        </div>
-        <div className="lp-roles rv">
+        </Reveal>
+        <Reveal className="lp-roles">
           <div className="lp-role-chips">
             {ROLES.map((r, i) => <button key={r.name} className={`lp-role-chip ${i === role ? 'active' : ''}`} onClick={() => setRole(i)}>{r.name}</button>)}
           </div>
-          <div className="lp-role-card" key={role}>
-            <div className="lp-role-q"><Sparkles size={18} /><p>&ldquo;{ROLES[role].q}&rdquo;</p></div>
-            <div className="lp-role-skills">{ROLES[role].skills.map((s) => <span key={s}>{s}</span>)}</div>
-            <small>Sample question. Real sets are generated from your job description and the candidate&rsquo;s resume.</small>
-          </div>
-        </div>
+          <AnimatePresence mode="wait" initial={false}>
+            <motion.div
+              className="lp-role-card"
+              key={role}
+              layout
+              initial={reduceMotion ? false : { opacity: 0, x: -48, y: 12, filter: 'blur(5px)' }}
+              animate={{ opacity: 1, x: 0, y: 0, filter: 'blur(0px)' }}
+              exit={reduceMotion ? undefined : { opacity: 0, x: 28, y: -8, filter: 'blur(3px)' }}
+              whileHover={reduceMotion ? undefined : { y: -9, scale: 1.025 }}
+              transition={{ duration: reduceMotion ? 0 : 0.32, ease: [0.22, 1, 0.36, 1], layout: { type: 'spring', stiffness: 280, damping: 28 } }}
+            >
+              <div className="lp-role-q"><Sparkles size={18} /><p>&ldquo;{ROLES[role].q}&rdquo;</p></div>
+              <div className="lp-role-skills">{ROLES[role].skills.map((s) => <span key={s}>{s}</span>)}</div>
+              <small>Sample question. Real sets are generated from your job description and the candidate&rsquo;s resume.</small>
+            </motion.div>
+          </AnimatePresence>
+        </Reveal>
       </section>
 
       <section id="integrity" className="lp-sec">
-        <div className="lp-sec-head rv">
+        <Reveal className="lp-sec-head">
           <span className="lp-kicker green">Integrity</span>
           <h2>Fair for candidates. Trustworthy for teams.</h2>
-        </div>
+        </Reveal>
         <div className="lp-trust-grid">
           {TRUST.map(({ icon: Icon, color, title, body }, i) => (
-            <div key={title} className={`lp-trust rv ${color}`} style={{ transitionDelay: `${i * 80}ms` }}>
+            <Reveal key={title} className={`lp-trust ${color}`} fromLeft={i % 2 === 0} fromRight={i % 2 !== 0} interactive delay={i * 0.075} whileHover={reduceMotion ? undefined : { y: -9, scale: 1.03 }}>
               <span><Icon size={22} /></span>
               <h3>{title}</h3>
               <p>{body}</p>
-            </div>
+            </Reveal>
           ))}
         </div>
-        <div className="lp-two rv">
-          <div>
+        <div className="lp-two">
+          <Reveal fromLeft interactive delay={0} whileHover={reduceMotion ? undefined : { y: -8, scale: 1.025 }}>
             <h3>For hiring teams</h3>
             <p>Sessions are watched for real violations such as tab switches, fullscreen exits and a second face on camera. A flagged interview never quietly slips through. Momentary things like a lost window focus are logged as a notice, so the signal stays meaningful.</p>
-          </div>
-          <div>
+          </Reveal>
+          <Reveal fromRight interactive delay={0.08} whileHover={reduceMotion ? undefined : { y: -8, scale: 1.025 }}>
             <h3>For candidates</h3>
             <p>You are told exactly what is monitored before your camera turns on. If something pauses your interview it is not a rejection. It is a hold for your interviewer to review, and they can resume you right where you left off.</p>
-          </div>
+          </Reveal>
         </div>
       </section>
 
       <section id="faq" className="lp-sec lp-sec-narrow">
-        <div className="lp-sec-head rv">
+        <Reveal className="lp-sec-head">
           <span className="lp-kicker pink">FAQ</span>
           <h2>Questions people actually ask</h2>
-        </div>
+        </Reveal>
         <div className="lp-faq">
           {FAQS.map((item, i) => (
-            <div className={`lp-faq-item rv ${openFaq === i ? 'open' : ''}`} key={item.q}>
+            <Reveal className={`lp-faq-item ${openFaq === i ? 'open' : ''}`} key={item.q} fromLeft={i % 2 === 0} fromRight={i % 2 !== 0} interactive delay={i * 0.04} whileHover={reduceMotion ? undefined : { y: -5, scale: 1.015 }}>
               <button onClick={() => setOpenFaq(openFaq === i ? -1 : i)} aria-expanded={openFaq === i}>
                 {item.q}<ChevronDown size={18} />
               </button>
               <div className="lp-faq-a"><p>{item.a}</p></div>
-            </div>
+            </Reveal>
           ))}
         </div>
       </section>
 
-      <section className="lp-cta rv">
+      <Reveal as="section" className="lp-cta" fromLeft whileHover={reduceMotion ? undefined : { y: -4 }}>
         <div className="lp-aurora small" aria-hidden="true"><i className="a1" /><i className="a2" /><i className="a3" /></div>
         <div className="lp-cta-inner">
           <h2>Ready for your next hiring round?</h2>
           <p>Sign in to set up a role, add candidates and run a full practice-to-report cycle with your team.</p>
           <div className="lp-actions center">
-            <button className="lp-btn primary lg" onClick={login}>Login to your account <ArrowRight size={18} /></button>
+            <motion.button className="lp-btn primary lg" onClick={login} whileHover={reduceMotion ? undefined : { y: -2, scale: 1.02 }} whileTap={reduceMotion ? undefined : { scale: 0.98 }}>Login to your account <ArrowRight size={18} /></motion.button>
           </div>
           <div className="lp-powered-badge"><span className="lp-powered-dot" /> Powered by <b>Acknowledger First</b></div>
         </div>
-      </section>
+      </Reveal>
 
       <footer className="lp-footer">
         <div className="lp-footer-brand">
@@ -536,5 +618,6 @@ export default function LandingPage() {
 
       {loginOpen && <LoginModal initialRole={isHiring ? 'admin' : 'candidate'} onClose={() => setLoginOpen(false)} />}
     </div>
+    </LazyMotion>
   )
 }

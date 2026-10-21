@@ -9,6 +9,8 @@
   --font-body: 'Inter', 'Segoe UI', sans-serif;
   --font-mono: 'JetBrains Mono', 'SFMono-Regular', monospace;
   --radius-sm: 8px; --radius-md: 14px; --radius-lg: 22px;
+  --motion-fast: 140ms ease;
+  --motion-ui: 200ms cubic-bezier(.2,.7,.2,1);
   --shadow-sm: 0 1px 2px rgba(43, 27, 84, 0.06);
   --shadow-md: 0 8px 24px rgba(43, 27, 84, 0.08);
   --shadow-lg: 0 20px 48px rgba(43, 27, 84, 0.14);
@@ -20,6 +22,24 @@ h1, h2, h3, h4 { font-family: var(--font-display); color: var(--ink); margin: 0;
 p { margin: 0; color: var(--ink-soft); line-height: 1.6; }
 a { color: inherit; }
 button { font-family: var(--font-body); }
+button:not(:disabled) { cursor: pointer; transition: filter var(--motion-fast), transform var(--motion-fast), box-shadow var(--motion-ui); }
+button:not(:disabled):hover { filter: brightness(1.06); }
+button:not(:disabled):active { transform: translateY(1px) scale(.985); }
+a[href] { transition: color var(--motion-fast), text-decoration-color var(--motion-fast); text-decoration-color: transparent; text-underline-offset: 3px; }
+a[href]:hover { text-decoration: underline; text-decoration-color: currentColor; }
+input, textarea, select { transition: border-color var(--motion-fast), box-shadow var(--motion-fast), background-color var(--motion-fast); }
+input:focus-visible, textarea:focus-visible, select:focus-visible {
+  border-color: var(--violet-500);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--violet-500) 18%, transparent);
+}
+.card, .stat-card, .topic-card, .project-card, .role-card, .lane-card, .verdict-card, .tile {
+  transition: border-color var(--motion-ui), box-shadow var(--motion-ui), transform var(--motion-ui);
+}
+.card:hover, .stat-card:hover, .topic-card:hover, .project-card:hover, .role-card:hover, .lane-card:hover, .verdict-card:hover, .tile:hover {
+  border-color: color-mix(in srgb, var(--violet-400) 48%, var(--border-soft));
+  box-shadow: var(--shadow-md);
+}
+.role-card:hover, .lane-card:hover, .verdict-card:hover, .tile:hover { transform: translateY(-2px); }
 ::selection { background: var(--violet-100); color: var(--violet-900); }
 :focus-visible { outline: 2px solid var(--violet-500); outline-offset: 2px; }
 .mono { font-family: var(--font-mono); }

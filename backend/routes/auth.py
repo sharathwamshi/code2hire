@@ -42,11 +42,14 @@ def change_password():
     data = request.get_json(force=True) or {}
     current_password = data.get("current_password") or ""
     new_password = data.get("new_password") or ""
+    confirm_password = data.get("confirm_password") or ""
 
     if not bcrypt.check_password_hash(user.password_hash, current_password):
         return jsonify({"error": "Current password is incorrect"}), 400
     if len(new_password) < 6:
         return jsonify({"error": "New password must be at least 6 characters"}), 400
+    if new_password != confirm_password:
+        return jsonify({"error": "New password and confirmation do not match"}), 400
 
     user.password_hash = bcrypt.generate_password_hash(new_password).decode("utf-8")
     user.must_change_password = False

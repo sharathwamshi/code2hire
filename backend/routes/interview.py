@@ -337,7 +337,7 @@ def submit_answer(session_id):
         return jsonify({"turn": ai_turn.to_dict(), "session_status": session.status})
 
     config = _active_config(user)
-    cap = (config.max_questions if config and config.max_questions else 12)
+    cap = (config.max_questions if config and config.max_questions else 4)
     if session.question_count >= cap * 2:
         # Hard stop: `cap` questions, each with at most one follow-up. The model is not
         # asked - it must not be able to keep going.
@@ -358,7 +358,7 @@ def submit_answer(session_id):
             candidate_name=user.full_name or user.username,
             resume_text=user.resume_text, jd_content=user.jd.content, jd_key_points=(user.jd.key_points or []),
             difficulty=session.difficulty, transcript=_transcript_for(session),
-            questions_asked=session.question_count, max_questions=config.max_questions if config else 12,
+            questions_asked=session.question_count, max_questions=config.max_questions if config else 4,
         )
     except Exception as exc:
         return jsonify({"error": f"Could not get the next question: {exc}"}), 502

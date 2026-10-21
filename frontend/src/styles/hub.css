@@ -73,6 +73,7 @@
 .pin-btn { background: transparent; border: none; cursor: pointer; color: var(--ink-faint); padding: 4px; border-radius: 6px; display: inline-flex; }
 .pin-btn:hover { color: var(--violet-600); background: var(--violet-050); }
 .pin-btn.on { color: var(--amber); }
+.pin-btn.on svg path:nth-of-type(2) { fill: currentColor; }
 
 /* ---- attention list (Home) ---- */
 .attn-list { display: grid; gap: 0; }
