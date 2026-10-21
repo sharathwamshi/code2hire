@@ -1,5 +1,6 @@
 import io
 import os
+import re
 import secrets
 import string
 import threading
@@ -18,6 +19,9 @@ from models import (
 from routes.utils import role_required
 from services import anthropic_service
 from services.resume_parser import extract_text_from_upload, UnsupportedResumeFormat
+from services.credential_mailer import (
+    CredentialEmailError, save_smtp_password, send_temporary_password, test_smtp_connection,
+)
 from flask_jwt_extended import get_jwt_identity
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import letter
@@ -33,6 +37,14 @@ admin_bp = Blueprint("admin", __name__, url_prefix="/api/admin")
 def _gen_password(length=10):
     alphabet = string.ascii_letters + string.digits
     return "".join(secrets.choice(alphabet) for _ in range(length))
+
+
+def _credential_email_status(user, password):
+    try:
+        return send_temporary_password(user.email, user.username, password)
+    except CredentialEmailError as exc:
+        current_app.logger.exception("Could not send temporary credentials to user %s", user.id)
+        return {"status": "failed", "message": str(exc)}
 
 
 # ---------------------------------------------------------------------------
@@ -123,25 +135,65 @@ def get_user(user_id):
 @admin_bp.post("/users")
 @role_required("admin")
 def create_user():
-    data = request.get_json(force=True) or {}
-    username = (data.get("username") or "").strip()
-    if not username:
-        return jsonify({"error": "username is required"}), 400
+    data = (request.get_json(silent=True) or {}) if request.is_json else request.form
+    full_name = (data.get("full_name") or "").strip()
+    email = (data.get("email") or "").strip()
+    if not full_name:
+        return jsonify({"error": "full name is required"}), 400
+    if not email:
+        return jsonify({"error": "email is required"}), 400
+    if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
+        return jsonify({"error": "enter a valid email address"}), 400
+
+    resume_text = (data.get("resume_text") or "").strip()
+    resume_filename = None
+    if "file" in request.files:
+        try:
+            resume_text, resume_filename = extract_text_from_upload(request.files["file"])
+        except UnsupportedResumeFormat as exc:
+            return jsonify({"error": str(exc)}), 400
+    if not resume_text:
+        return jsonify({"error": "resume is required"}), 400
+
+    username = email
     if User.query.filter_by(username=username).first():
-        return jsonify({"error": "username already exists"}), 409
+        return jsonify({"error": "email is already registered"}), 409
 
     password = data.get("password") or _gen_password()
+    jd_id = data.get("jd_id") or None
+    if jd_id is not None:
+        try:
+            jd_id = int(jd_id)
+        except (TypeError, ValueError):
+            return jsonify({"error": "valid role is required"}), 400
     user = User(
         username=username,
         password_hash=bcrypt.generate_password_hash(password).decode("utf-8"),
-        role="candidate", full_name=data.get("full_name"), email=data.get("email"),
-        training_level=data.get("training_level", "medium"), jd_id=data.get("jd_id"),
-        resume_text=data.get("resume_text"), must_change_password=True,
+        role="candidate", full_name=full_name, email=email,
+        training_level=data.get("training_level", "medium"), jd_id=jd_id,
+        resume_filename=resume_filename, resume_text=resume_text, must_change_password=True,
         track="interview" if data.get("track") == "interview" else "practice",
     )
     db.session.add(user)
     db.session.commit()
-    return jsonify({"user": user.to_dict(), "generated_password": password}), 201
+    return jsonify({
+        "user": user.to_dict(),
+        "generated_password": password,
+    }), 201
+
+
+@admin_bp.post("/users/<int:user_id>/send-credentials")
+@role_required("admin")
+def send_user_credentials(user_id):
+    user = User.query.filter_by(id=user_id, role="candidate").first_or_404()
+    data = request.get_json(force=True) or {}
+    password = data.get("password") or ""
+    if not password or not bcrypt.check_password_hash(user.password_hash, password):
+        return jsonify({"error": "The displayed password is no longer valid. Reset the password and try again."}), 400
+
+    credential_email = _credential_email_status(user, password)
+    status_code = 502 if credential_email["status"] == "failed" else 200
+    return jsonify({"credential_email": credential_email}), status_code
 
 
 @admin_bp.put("/users/<int:user_id>")
@@ -184,7 +236,10 @@ def update_user(user_id):
         user.password_hash = bcrypt.generate_password_hash(new_pw).decode("utf-8")
         user.must_change_password = True
         db.session.commit()
-        return jsonify({"user": user.to_dict(), "generated_password": new_pw})
+        return jsonify({
+            "user": user.to_dict(),
+            "generated_password": new_pw,
+        })
 
     db.session.commit()
     return jsonify({"user": user.to_dict()})
@@ -283,6 +338,13 @@ def get_settings():
         "anthropic_model": Setting.get("anthropic_model", "claude-sonnet-4-6"),
         "azure_speech_key_set": bool(azure_key), "azure_speech_key_masked": azure_masked,
         "azure_speech_region": Setting.get("azure_speech_region", ""),
+        "smtp_host": Setting.get("smtp_host", current_app.config["SMTP_HOST"]),
+        "smtp_port": Setting.get("smtp_port", str(current_app.config["SMTP_PORT"])),
+        "smtp_username": Setting.get("smtp_username", current_app.config["SMTP_USERNAME"]),
+        "smtp_from_email": Setting.get("smtp_from_email", current_app.config["SMTP_FROM_EMAIL"]),
+        "smtp_use_tls": Setting.get("smtp_use_tls", str(current_app.config["SMTP_USE_TLS"])).lower() == "true",
+        "smtp_use_ssl": Setting.get("smtp_use_ssl", str(current_app.config["SMTP_USE_SSL"])).lower() == "true",
+        "smtp_password_set": bool(Setting.get("smtp_password", current_app.config["SMTP_PASSWORD"])),
     })
 
 
@@ -290,6 +352,23 @@ def get_settings():
 @role_required("admin")
 def update_settings():
     data = request.get_json(force=True) or {}
+    smtp_port = None
+    if "smtp_port" in data:
+        try:
+            smtp_port = int(data["smtp_port"])
+            if not 1 <= smtp_port <= 65535:
+                raise ValueError
+        except (TypeError, ValueError):
+            return jsonify({"error": "SMTP port must be a number between 1 and 65535."}), 400
+    for field in ("smtp_use_tls", "smtp_use_ssl"):
+        if field in data and not isinstance(data[field], bool):
+            return jsonify({"error": f"{field} must be true or false."}), 400
+    if "smtp_password" in data and data["smtp_password"] and not isinstance(data["smtp_password"], str):
+        return jsonify({"error": "SMTP password must be text."}), 400
+    for field in ("smtp_host", "smtp_username", "smtp_from_email"):
+        if field in data and data[field] is not None and not isinstance(data[field], str):
+            return jsonify({"error": f"{field} must be text."}), 400
+
     if data.get("anthropic_api_key"):
         Setting.set("anthropic_api_key", data["anthropic_api_key"].strip())
     if data.get("anthropic_model"):
@@ -298,7 +377,32 @@ def update_settings():
         Setting.set("azure_speech_key", data["azure_speech_key"].strip())
     if data.get("azure_speech_region"):
         Setting.set("azure_speech_region", data["azure_speech_region"].strip())
+    smtp_fields = {
+        "smtp_host", "smtp_username", "smtp_from_email", "smtp_use_tls", "smtp_use_ssl",
+    }
+    for field in smtp_fields:
+        if field in data:
+            value = data[field]
+            if field in ("smtp_use_tls", "smtp_use_ssl"):
+                value = "true" if value else "false"
+            else:
+                value = (value or "").strip()
+            Setting.set(field, value)
+    if smtp_port is not None:
+        Setting.set("smtp_port", str(smtp_port))
+    if data.get("smtp_password"):
+        save_smtp_password(data["smtp_password"])
     return jsonify({"message": "Settings updated"})
+
+
+@admin_bp.post("/settings/test-smtp")
+@role_required("admin")
+def test_smtp():
+    try:
+        test_smtp_connection()
+        return jsonify({"ok": True, "message": "SMTP connection and authentication succeeded."})
+    except CredentialEmailError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
 
 
 @admin_bp.post("/settings/clear-anthropic-key")
@@ -369,6 +473,31 @@ def upsert_interview_config(user_id):
     data = request.get_json(force=True) or {}
 
     config = InterviewConfig.query.filter_by(user_id=user_id).first()
+    raw_max_questions = data.get("max_questions", config.max_questions if config and config.max_questions else 4)
+    if isinstance(raw_max_questions, bool) or not (
+        isinstance(raw_max_questions, int)
+        or isinstance(raw_max_questions, str) and raw_max_questions.strip().isdigit()
+    ):
+        return jsonify({"error": "Max questions must be a whole number between 4 and 30."}), 400
+    max_questions = int(raw_max_questions)
+    if not 4 <= max_questions <= 30:
+        return jsonify({"error": "Max questions must be a positive whole number between 4 and 30."}), 400
+
+    time_limit = None
+    if "time_limit_minutes" in data:
+        raw_time_limit = data["time_limit_minutes"]
+        if raw_time_limit is None or isinstance(raw_time_limit, str) and not raw_time_limit.strip():
+            time_limit = None
+        elif isinstance(raw_time_limit, bool) or not (
+            isinstance(raw_time_limit, int)
+            or isinstance(raw_time_limit, str) and raw_time_limit.strip().isdigit()
+        ):
+            return jsonify({"error": "Time limit must be a whole number of minutes."}), 400
+        else:
+            time_limit = int(raw_time_limit)
+        if time_limit is not None and not (5 <= time_limit <= 240):
+            return jsonify({"error": "Time limit must be a positive whole number between 5 and 240 minutes (or empty for no limit)."}), 400
+
     if not config:
         config = InterviewConfig(user_id=user_id)
         db.session.add(config)
@@ -377,15 +506,9 @@ def upsert_interview_config(user_id):
     config.difficulty = data.get("difficulty", config.difficulty or "medium")
     config.voice_enabled = data.get("voice_enabled", config.voice_enabled if config.voice_enabled is not None else True)
     config.voice_id = data.get("voice_id", config.voice_id)
-    config.max_questions = data.get("max_questions", config.max_questions or 12)
+    config.max_questions = max_questions
     if "time_limit_minutes" in data:
-        try:
-            tl = int(data["time_limit_minutes"]) if data["time_limit_minutes"] not in (None, "", 0, "0") else None
-        except (TypeError, ValueError):
-            return jsonify({"error": "Time limit must be a number of minutes."}), 400
-        if tl is not None and not (5 <= tl <= 240):
-            return jsonify({"error": "Time limit must be between 5 and 240 minutes (or empty for no limit)."}), 400
-        config.time_limit_minutes = tl
+        config.time_limit_minutes = time_limit
     config.skill_tags = data.get("skill_tags", config.skill_tags or [])
     config.violation_threshold = data.get("violation_threshold", config.violation_threshold or 1)
     config.require_fullscreen = data.get("require_fullscreen", config.require_fullscreen if config.require_fullscreen is not None else True)
@@ -598,6 +721,13 @@ def list_notifications():
     return jsonify([n.to_dict() for n in notes])
 
 
+@admin_bp.get("/notifications/unread-count")
+@role_required("admin")
+def unread_notification_count():
+    count = Notification.query.filter_by(is_read=False).count()
+    return jsonify({"count": count})
+
+
 @admin_bp.post("/notifications/<int:notification_id>/read")
 @role_required("admin")
 def mark_notification_read(notification_id):
@@ -613,6 +743,14 @@ def mark_all_notifications_read():
     Notification.query.filter_by(is_read=False).update({"is_read": True})
     db.session.commit()
     return jsonify({"message": "ok"})
+
+
+@admin_bp.delete("/notifications")
+@role_required("admin")
+def clear_notifications():
+    deleted_count = Notification.query.delete(synchronize_session=False)
+    db.session.commit()
+    return jsonify({"message": "ok", "deleted_count": deleted_count})
 
 
 @admin_bp.post("/interview-sessions/<int:session_id>/generate-report")
@@ -861,7 +999,7 @@ def start_draft_generation(user):
     # Apply the configured question count: one question (plus one follow-up) per requirement
     # point, for at most `max_questions` points - not one per point in the whole JD.
     cfg = InterviewConfig.query.filter_by(user_id=user.id).first()
-    limit = (cfg.max_questions if cfg and cfg.max_questions else 12)
+    limit = (cfg.max_questions if cfg and cfg.max_questions else 4)
     key_points = key_points[:max(1, int(limit))]
 
     draft = InterviewDraft(

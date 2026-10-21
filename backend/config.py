@@ -35,5 +35,13 @@ class Config:
 
     FRONTEND_ORIGIN = os.getenv("FRONTEND_ORIGIN", "http://localhost:5174")
 
+    SMTP_HOST = os.getenv("SMTP_HOST", "smtp.zauca.in")
+    SMTP_PORT = int(os.getenv("SMTP_PORT", "465"))
+    SMTP_USERNAME = os.getenv("SMTP_USERNAME", "anushach@acknowledgerfirst.com")
+    SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
+    SMTP_FROM_EMAIL = os.getenv("SMTP_FROM_EMAIL", "anushach@acknowledgerfirst.com")
+    SMTP_USE_TLS = os.getenv("SMTP_USE_TLS", "false").lower() == "true"
+    SMTP_USE_SSL = os.getenv("SMTP_USE_SSL", "true").lower() == "true"
+
     # Interview integrity defaults (per-JD/candidate config can override)
     DEFAULT_VIOLATION_THRESHOLD = int(os.getenv("DEFAULT_VIOLATION_THRESHOLD", "1"))

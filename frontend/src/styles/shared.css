@@ -187,10 +187,22 @@ textarea.input { resize: vertical; min-height: 100px; line-height: 1.5; }
 .live-control-btn { width: 52px; height: 52px; border-radius: 50%; border: none; display: flex; align-items: center; justify-content: center; cursor: pointer; background: rgba(255,255,255,0.1); color: #fff; }
 .live-control-btn.end-call { background: #E74C3C; }
 
-.notif-bell { position: relative; cursor: pointer; padding: 6px; border-radius: 8px; }
+.notif-bell { position: relative; display: inline-flex; align-items: center; justify-content: center; border: 0; background: transparent; cursor: pointer; padding: 6px; border-radius: 8px; }
 .notif-bell:hover { background: var(--violet-050); }
 .notif-dot { position: absolute; top: 4px; right: 4px; width: 8px; height: 8px; border-radius: 50%; background: #E74C3C; }
 .notif-dropdown { position: absolute; top: 100%; right: 0; margin-top: 8px; width: 340px; background: #fff; border-radius: 14px; box-shadow: var(--shadow-lg); border: 1px solid var(--border-soft); max-height: 400px; overflow-y: auto; z-index: 60; }
+.notif-header { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--border-soft); }
+.notif-heading { display: flex; flex-direction: column; gap: 2px; font-size: 13.5px; }
+.notif-heading span { font-size: 11.5px; color: var(--ink-faint); }
+.notif-actions { display: flex; align-items: center; gap: 6px; }
+.notif-action { display: inline-flex; align-items: center; gap: 4px; border: 0; padding: 5px 7px; border-radius: 6px; background: transparent; color: var(--violet-700); font: inherit; font-size: 11.5px; white-space: nowrap; cursor: pointer; }
+.notif-action:hover:not(:disabled) { background: var(--violet-050); }
+.notif-action:disabled { opacity: .5; cursor: not-allowed; }
+.notif-action.notif-clear { color: var(--red); }
+.notif-filters { display: flex; gap: 6px; padding: 8px 12px; border-bottom: 1px solid var(--border-soft); }
+.notif-filters button { border: 0; border-radius: 999px; padding: 5px 10px; background: transparent; color: var(--ink-soft); font: inherit; font-size: 11.5px; cursor: pointer; }
+.notif-filters button.active { background: var(--violet-050); color: var(--violet-700); font-weight: 600; }
+.notif-error { padding: 9px 14px; color: var(--red); background: #FEF6F6; font-size: 12px; }
 .notif-item { padding: 14px 16px; border-bottom: 1px solid var(--border-soft); font-size: 13px; }
 .notif-item.unread { background: var(--violet-050); }
 .notif-item .notif-time { font-size: 11px; color: var(--ink-faint); margin-top: 4px; }

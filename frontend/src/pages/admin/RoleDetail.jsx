@@ -90,7 +90,7 @@ export default function RoleDetail() {
           <span className="page-eyebrow">Role</span>
           <h1 className="page-title" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             {role.title}
-            <button className={`pin-btn ${pinned.includes(role.id) ? 'on' : ''}`} aria-label="Pin role" onClick={() => setPinned(togglePinned(role.id))}><Pin size={17} /></button>
+            <button className={`pin-btn ${pinned.includes(role.id) ? 'on' : ''}`} aria-label={pinned.includes(role.id) ? 'Unpin role' : 'Pin role'} onClick={() => setPinned(togglePinned(role.id))}><Pin size={17} fill={pinned.includes(role.id) ? 'currentColor' : 'none'} /></button>
           </h1>
           <p className="page-subtitle">{role.company || 'General role'} · {role.total} candidate{role.total === 1 ? '' : 's'}</p>
           {role.skills?.length > 0 && <div className="chip-row" style={{ marginTop: 10 }}>{role.skills.map((s, i) => <span key={i} className="skill-chip">{s}</span>)}</div>}

@@ -10,15 +10,18 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@react-three/drei": "^10.7.9",
+    "@react-three/fiber": "^9.8.2",
     "axios": "^1.20.0",
+    "face-api.js": "^0.22.2",
+    "framer-motion": "^14.2.0",
     "lucide-react": "^1.47.0",
     "microsoft-cognitiveservices-speech-sdk": "^1.51.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "react-router-dom": "^7.18.4",
     "socket.io-client": "^4.8.3",
-    "three": "^0.186.0",
-    "face-api.js": "^0.22.2"
+    "three": "^0.186.1"
   },
   "devDependencies": {
     "@types/react": "^19.2.18",

@@ -48,6 +48,21 @@ python seed.py     # creates tables + default admin (admin / Admin@12345)
 python app.py      # runs Flask + Socket.IO on port 5050
 ```
 
+To configure candidate credential emails, open **Admin → Settings → SMTP**.
+The Zauca mailbox defaults to `smtp.zauca.in:465` with SSL and the provided
+account address. Enter the mailbox password in Settings, save, then use **Test
+SMTP connection**. The password is encrypted in application settings and is
+never returned to the browser. SMTP can also be configured through `SMTP_HOST`,
+`SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`, and `SMTP_FROM_EMAIL` in
+`backend/.env`. For STARTTLS instead of SSL, use port 587, `SMTP_USE_TLS=true`,
+and `SMTP_USE_SSL=false`. After creating a candidate, or resetting their
+password from their profile, an admin can explicitly choose
+**Send credentials by email**. The button requires a saved email address and a
+currently valid temporary password. If SMTP is not configured or delivery
+fails, the admin UI reports that and still displays the one-time password so
+it can be shared manually. Candidates are required to change temporary
+passwords after signing in.
+
 > If you're upgrading an existing database rather than starting fresh, run the
 > migrations in `backend/migrations/` in order instead of `seed.py`'s
 > `db.create_all()` — see section 6 below.

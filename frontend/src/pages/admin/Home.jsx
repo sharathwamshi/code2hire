@@ -100,7 +100,7 @@ export default function Home() {
               <div key={r.id} className="role-card" role="button" tabIndex={0} onClick={() => navigate(`/admin/roles/${r.id}`)} onKeyDown={(e) => { if (e.key === 'Enter') navigate(`/admin/roles/${r.id}`) }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
                   <div><div className="t">{r.title}</div><div className="c">{r.company || 'General role'}</div></div>
-                  <button className={`pin-btn ${pinned.includes(r.id) ? 'on' : ''}`} aria-label={pinned.includes(r.id) ? 'Unpin role' : 'Pin role'} onClick={(e) => { e.stopPropagation(); setPinned(togglePinned(r.id)) }}><Pin size={15} /></button>
+                  <button className={`pin-btn ${pinned.includes(r.id) ? 'on' : ''}`} aria-label={pinned.includes(r.id) ? 'Unpin role' : 'Pin role'} onClick={(e) => { e.stopPropagation(); setPinned(togglePinned(r.id)) }}><Pin size={15} fill={pinned.includes(r.id) ? 'currentColor' : 'none'} /></button>
                 </div>
                 <PipeBar pipeline={r.pipeline} total={r.total} />
                 <div className="meta"><span>{r.total} candidate{r.total === 1 ? '' : 's'}</span>{r.awaiting_review > 0 && <span className="stage-chip tone-awaiting_review"><span className="dot" />{r.awaiting_review} to review</span>}</div>

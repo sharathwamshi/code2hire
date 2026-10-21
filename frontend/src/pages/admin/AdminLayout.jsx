@@ -11,8 +11,8 @@ import '../../styles/hub.css'
 import '../../styles/admin-mobile.css'
 
 const NAV = [
-  { to: '/admin', label: 'Home', icon: LayoutGrid, end: true, badge: true },
-  { to: '/admin/roles', label: 'Roles', icon: Briefcase },
+  { to: '/admin', label: 'Dashboard', icon: LayoutGrid, end: true, badge: true },
+  { to: '/admin/roles', label: 'Jobs', icon: Briefcase },
   { to: '/admin/users', label: 'Candidates', icon: Users },
 ]
 
@@ -81,23 +81,30 @@ function Shell() {
       {drawerOpen && <div className="admin-scrim" onClick={() => setDrawerOpen(false)} aria-hidden="true" />}
       <aside className="admin-sidebar" id="admin-sidebar" aria-label="Main menu">
         <div className="admin-sidebar-top">
-          <span className="admin-brand">{collapsed ? 'C2H' : 'Code2Hire'}</span>
-          <button className="collapse-btn collapse-desktop" onClick={() => setCollapsed((c) => !c)} aria-label="Collapse menu">
-            {collapsed ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
-          </button>
+          <span className="admin-brand">Code2Hire</span>
           <button className="collapse-btn close-mobile" onClick={() => setDrawerOpen(false)} aria-label="Close menu">
             <X size={16} />
           </button>
         </div>
         <nav className="admin-nav">
+          <button
+            className="sidebar-toggle"
+            onClick={() => setCollapsed((c) => !c)}
+            aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            aria-expanded={!collapsed}
+            title={collapsed ? 'Expand sidebar' : undefined}
+          >
+            {collapsed ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
+            {!collapsed && <span>Collapse</span>}
+          </button>
           {NAV.map(({ to, label, icon: Icon, end, badge: hasBadge }) => (
-            <NavLink key={to} to={to} end={end} className={({ isActive }) => `admin-nav-link ${isActive ? 'active' : ''}`}>
+            <NavLink key={to} to={to} end={end} title={collapsed ? label : undefined} className={({ isActive }) => `admin-nav-link ${isActive ? 'active' : ''}`}>
               <Icon size={18} />
               {!collapsed && <span>{label}</span>}
               {hasBadge && badge > 0 && <span className="nav-badge" title={`${badge} waiting on you`}>{badge > 99 ? '99+' : badge}</span>}
             </NavLink>
           ))}
-          <NavLink to="/admin/settings" className={({ isActive }) => `admin-nav-link sub ${isActive ? 'active' : ''}`}>
+          <NavLink to="/admin/settings" title={collapsed ? 'Settings' : undefined} className={({ isActive }) => `admin-nav-link sub ${isActive ? 'active' : ''}`}>
             <Settings size={18} />{!collapsed && <span>Settings</span>}
           </NavLink>
         </nav>
@@ -111,7 +118,9 @@ function Shell() {
               </div>
             </div>
           )}
-          <button className="logout-btn" onClick={logout}><LogOut size={16} /> {!collapsed && 'Sign out'}</button>
+          <button className="logout-btn" onClick={logout} aria-label="Sign out" title={collapsed ? 'Sign out' : undefined}>
+            <LogOut size={16} /> {!collapsed && 'Sign out'}
+          </button>
         </div>
       </aside>
       <main className="admin-main">
