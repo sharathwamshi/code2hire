@@ -11,6 +11,18 @@ const blank = {
   track: 'interview', mode: 'ai', difficulty: 'medium', voice_enabled: true, max_questions: 4, time_limit_minutes: '', require_fullscreen: true,
 }
 
+const emailDomainCorrections = {
+  'gmal.com': 'gmail.com',
+  'gmai.com': 'gmail.com',
+  'gmial.com': 'gmail.com',
+  'gamil.com': 'gmail.com',
+  'gmail.co': 'gmail.com',
+  'gmail.con': 'gmail.com',
+  'gmail.cmo': 'gmail.com',
+  'gmail.om': 'gmail.com',
+  'gmail.comm': 'gmail.com',
+}
+
 /**
  * Add a candidate in three short steps - Who -> What -> Review & create - always inside a role.
  * Creating a Real-interview candidate also starts generating their questions; those must be
@@ -41,9 +53,12 @@ export default function AddCandidateWizard({ open, roles, presetRoleId, onClose,
   if (!open) return null
 
   const onName = (v) => set({ full_name: v })
-  const onEmail = (v) => set({ email: v })
+  const onEmail = (v) => set({ email: v.toLowerCase() })
 
-  const emailValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(f.email.trim())
+  const emailDomain = f.email.trim().toLowerCase().split('@')[1]
+  const correctedDomain = emailDomainCorrections[emailDomain]
+  const suggestedEmail = correctedDomain ? `${f.email.trim().slice(0, f.email.lastIndexOf('@') + 1)}${correctedDomain}` : ''
+  const emailValid = !suggestedEmail && /^[a-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[a-z0-9!#$%&'*+/=?^_`{|}~-]+)*@(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i.test(f.email.trim())
   const step1Ok = f.jd_id && f.full_name.trim() && emailValid
   const hasResume = !!file || !!f.resume_text.trim()
   const real = f.track === 'interview'
@@ -53,7 +68,7 @@ export default function AddCandidateWizard({ open, roles, presetRoleId, onClose,
     if (step === 1 && !f.jd_id) { setError('Choose the role the candidate is applying for.'); return }
     if (step === 1 && !f.full_name.trim()) { setError('Candidate name is required.'); return }
     if (step === 1 && !f.email.trim()) { setError('Email is required.'); return }
-    if (step === 1 && !emailValid) { setError('Enter a valid email address.'); return }
+    if (step === 1 && !emailValid) { setError(suggestedEmail ? `Check the email domain. Did you mean ${suggestedEmail}?` : 'Enter a valid email address.'); return }
     if (step === 1 && !hasResume) { setError('Resume is required. Upload a resume file or paste the resume text before continuing.'); return }
     if (step === 2 && real && f.mode === 'ai') {
       const maxQuestions = Number(f.max_questions)
@@ -73,7 +88,7 @@ export default function AddCandidateWizard({ open, roles, presetRoleId, onClose,
   const create = async () => {
     if (!step1Ok || !hasResume) {
       setStep(1)
-      setError(!hasResume ? 'Resume is required. Upload a resume file or paste the resume text before continuing.' : 'Enter the candidate name and a valid email address.')
+      setError(!hasResume ? 'Resume is required. Upload a resume file or paste the resume text before continuing.' : suggestedEmail ? `Check the email domain. Did you mean ${suggestedEmail}?` : 'Enter the candidate name and a valid email address.')
       return
     }
     setBusy(true); setError(''); setEmailStatus(null)
@@ -161,8 +176,8 @@ export default function AddCandidateWizard({ open, roles, presetRoleId, onClose,
             </div>
             <div className="form-grid">
               <div className="field"><label>Full name <span aria-hidden="true">*</span></label><input className="input" value={f.full_name} onChange={(e) => onName(e.target.value)} placeholder="e.g. Priya Sharma" autoFocus={!!presetRoleId} required /></div>
-              <div className="field"><label>Email <span aria-hidden="true">*</span></label><input className="input" type="email" value={f.email} onChange={(e) => onEmail(e.target.value)} placeholder="priya@example.com" required /></div>
-              <div className="field"><label>Username (same as email)</label><input className="input" value={f.email} readOnly /></div>
+              <div className="field"><label>Email <span aria-hidden="true">*</span></label><input className="input" type="email" value={f.email} onChange={(e) => onEmail(e.target.value)} placeholder="priya@example.com" autoCapitalize="none" autoCorrect="off" spellCheck={false} style={{ textTransform: 'none' }} aria-invalid={!!suggestedEmail} required />{suggestedEmail && <p role="alert" style={{ fontSize: 12, marginTop: 5, color: 'var(--red)' }}>Check the spelling. Did you mean {suggestedEmail}?</p>}</div>
+              <div className="field"><label>Username (same as email)</label><input className="input" value={f.email} readOnly style={{ textTransform: 'none' }} /></div>
             </div>
             <div className="field">
               <label>Resume <span aria-hidden="true">*</span></label>

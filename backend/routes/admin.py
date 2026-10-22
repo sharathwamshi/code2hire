@@ -33,6 +33,18 @@ from reportlab.platypus import (
 
 admin_bp = Blueprint("admin", __name__, url_prefix="/api/admin")
 
+_EMAIL_DOMAIN_CORRECTIONS = {
+    "gmal.com": "gmail.com",
+    "gmai.com": "gmail.com",
+    "gmial.com": "gmail.com",
+    "gamil.com": "gmail.com",
+    "gmail.co": "gmail.com",
+    "gmail.con": "gmail.com",
+    "gmail.cmo": "gmail.com",
+    "gmail.om": "gmail.com",
+    "gmail.comm": "gmail.com",
+}
+
 
 def _gen_password(length=10):
     alphabet = string.ascii_letters + string.digits
@@ -137,13 +149,17 @@ def get_user(user_id):
 def create_user():
     data = (request.get_json(silent=True) or {}) if request.is_json else request.form
     full_name = (data.get("full_name") or "").strip()
-    email = (data.get("email") or "").strip()
+    email = (data.get("email") or "").strip().lower()
     if not full_name:
         return jsonify({"error": "full name is required"}), 400
     if not email:
         return jsonify({"error": "email is required"}), 400
     if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
         return jsonify({"error": "enter a valid email address"}), 400
+    domain = email.rsplit("@", 1)[1]
+    if domain in _EMAIL_DOMAIN_CORRECTIONS:
+        corrected_email = f"{email.rsplit('@', 1)[0]}@{_EMAIL_DOMAIN_CORRECTIONS[domain]}"
+        return jsonify({"error": f"check the email domain; did you mean {corrected_email}?"}), 400
 
     resume_text = (data.get("resume_text") or "").strip()
     resume_filename = None

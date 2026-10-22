@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
-import { Search, Plus, UserPlus, Pin, Clock } from 'lucide-react'
+import { Search, Plus, UserPlus, Pin, Clock, X } from 'lucide-react'
 import client from '../api/client'
 import CandidateRow from './CandidateRow'
 import { PipeBar } from './StageChip'
@@ -133,6 +133,9 @@ export default function SearchPalette({ open, onClose }) {
           <input ref={inputRef} value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search roles, skills and candidates"
             placeholder="Search a role, a skill (e.g. React), a candidate or an email..." />
           {loading && <span className="spinner dark" />}
+          <button type="button" className="palette-close" onClick={close} aria-label="Close search" title="Close search">
+            <X size={18} />
+          </button>
         </div>
         <div className="palette-chips">
           {FILTERS.map((f) => <button key={f.key} className={`fchip ${isOn(f.key) ? 'on' : ''}`} onClick={() => toggleFilter(f.key)} aria-pressed={isOn(f.key)}>{f.label}</button>)}

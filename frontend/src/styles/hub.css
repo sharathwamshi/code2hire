@@ -164,7 +164,10 @@
 .palette-overlay { position: fixed; inset: 0; background: rgba(43, 27, 84, 0.4); backdrop-filter: blur(3px); z-index: 80; display: flex; justify-content: center; align-items: flex-start; padding: 8vh 20px 20px; }
 .palette { width: 100%; max-width: 980px; max-height: 80vh; background: var(--surface-raised); border-radius: var(--radius-lg); box-shadow: var(--shadow-lg); display: flex; flex-direction: column; overflow: hidden; }
 .palette-input { display: flex; align-items: center; gap: 12px; padding: 16px 20px; border-bottom: 1px solid var(--border-soft); }
-.palette-input input { flex: 1; border: none; outline: none; font: inherit; font-size: 16px; background: transparent; color: var(--ink); }
+.palette-input input { flex: 1; min-width: 0; border: none; outline: none; font: inherit; font-size: 16px; background: transparent; color: var(--ink); }
+.palette-close { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; padding: 0; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-raised); color: var(--ink-faint); cursor: pointer; }
+.palette-close:hover { border-color: var(--violet-400); background: var(--violet-050); color: var(--ink); }
+.palette-close:focus-visible { outline: 2px solid var(--violet-600); outline-offset: 2px; }
 .palette-chips { display: flex; flex-wrap: wrap; gap: 8px; padding: 10px 20px; border-bottom: 1px solid var(--border-soft); background: var(--surface); }
 .fchip { border: 1px solid var(--border); background: var(--surface-raised); border-radius: 999px; padding: 4px 12px; font: inherit; font-size: 12px; font-weight: 600; color: var(--ink-soft); cursor: pointer; }
 .fchip:hover { border-color: var(--violet-400); }
