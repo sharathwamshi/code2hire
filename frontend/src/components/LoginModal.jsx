@@ -138,6 +138,7 @@ export default function LoginModal({ onClose, initialRole = 'candidate' }) {
             {loading ? <><span className="lm-spin" /> Signing in...</> : <>{cfg.cta} <ArrowRight size={18} /></>}
           </button>
           <p className="lm-foot"><Lock size={13} /> {cfg.foot}</p>
+          <small className="lm-version">Version 01.00.04</small>
         </form>
       </div>
     </div>
