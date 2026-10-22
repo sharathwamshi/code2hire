@@ -1,0 +1,82 @@
+# =============================================================================
+# Environment / secrets — never commit real credentials
+# =============================================================================
+backend/.env
+.env
+.env.local
+.env.*.local
+!backend/env.example.txt
+!backend/.env.example
+
+# =============================================================================
+# Backend (Python / Flask)
+# =============================================================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Local databases (the app uses MySQL — DATABASE_URL — but ignore a stray local
+# SQLite file too, in case one gets created during quick local testing)
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+
+# User-uploaded content — resumes and interview recordings. Real candidate data;
+# must never be committed. The folders themselves are created at runtime by
+# app.py (os.makedirs), so nothing here needs to exist in git.
+backend/uploads/
+
+# Test / tooling caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+.coverage.*
+
+# =============================================================================
+# Frontend (Node / Vite / React)
+# =============================================================================
+frontend/node_modules/
+node_modules/
+
+# Build output
+frontend/dist/
+frontend/dist-ssr/
+dist/
+dist-ssr/
+
+# Local Vite/Node env overrides
+*.local
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# =============================================================================
+# Editor / OS clutter
+# =============================================================================
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+Thumbs.db
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?

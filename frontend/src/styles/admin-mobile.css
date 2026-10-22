@@ -1,0 +1,98 @@
+/* Admin portal: phone and tablet layout. Everything is scoped so desktop is untouched. */
+.menu-btn, .admin-scrim, .close-mobile { display: none; }
+
+@media (max-width: 900px) {
+  /* shell: sidebar becomes a slide-out drawer */
+  .admin-shell, .admin-shell.is-collapsed { display: block; }
+  .admin-sidebar { position: fixed; left: 0; top: 0; bottom: 0; width: min(290px, 86vw); height: 100dvh; z-index: 200; transform: translateX(-102%); transition: transform .24s ease; box-shadow: none; overflow-y: auto; padding-top: max(20px, env(safe-area-inset-top)); }
+  .admin-shell.drawer-open .admin-sidebar { transform: none; box-shadow: 0 0 60px rgba(20,10,60,.5); }
+  .admin-scrim { display: block; position: fixed; inset: 0; z-index: 190; background: rgba(20,10,50,.5); backdrop-filter: blur(2px); animation: am-fade .2s ease; }
+  @keyframes am-fade { from { opacity: 0; } to { opacity: 1; } }
+  .collapse-desktop { display: none; }
+  .sidebar-toggle { display: none; }
+  .close-mobile { display: flex; }
+  .admin-nav-link { padding: 14px 14px; font-size: 15px; }
+  .logout-btn { padding: 12px 14px; }
+
+  /* top bar: menu button + search + bell, all on one row */
+  .admin-main { padding: 14px 16px 48px; max-width: 100%; min-width: 0; }
+  .topbar { gap: 10px; margin: 0 0 18px; position: sticky; top: 0; z-index: 40; background: var(--surface); padding: 6px 0 8px; }
+  .menu-btn { display: inline-flex; position: relative; align-items: center; justify-content: center; flex: none; width: 42px; height: 42px; border-radius: 12px; border: 1.5px solid var(--border); background: var(--surface-raised); color: var(--ink); cursor: pointer; }
+  .menu-dot { position: absolute; top: 7px; right: 7px; width: 9px; height: 9px; border-radius: 50%; background: #E8574B; border: 2px solid var(--surface-raised); }
+  .search-trigger { min-width: 0; max-width: none; padding: 11px 12px; min-height: 42px; }
+  .search-trigger .search-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+  .search-trigger kbd { display: none; }
+}
+
+@media (max-width: 900px) {
+  /* iOS zooms into inputs under 16px; keep form controls comfortable to tap */
+  .admin-main input:not([type="checkbox"]):not([type="radio"]), .admin-main select, .admin-main textarea,
+  .modal-panel input:not([type="checkbox"]):not([type="radio"]), .modal-panel select, .modal-panel textarea { font-size: 16px; }
+  .admin-main .btn, .modal-panel .btn { min-height: 40px; }
+  .admin-main .btn-sm { min-height: 36px; }
+  .admin-main .page-title, .admin-main h1 { font-size: 26px; line-height: 1.2; overflow-wrap: anywhere; }
+  .admin-main .card { padding: 18px; }
+  .admin-main .card, .admin-main .cand-list, .admin-main p, .admin-main h3 { min-width: 0; overflow-wrap: anywhere; }
+
+  /* stepper scrolls sideways with snapping and an edge fade */
+  .stepper { scroll-snap-type: x proximity; -webkit-overflow-scrolling: touch; scrollbar-width: none; -webkit-mask-image: linear-gradient(90deg, #000 0, #000 calc(100% - 22px), transparent 100%); mask-image: linear-gradient(90deg, #000 0, #000 calc(100% - 22px), transparent 100%); }
+  .stepper::-webkit-scrollbar { display: none; }
+  .step { flex: 0 0 auto; min-width: 140px; scroll-snap-align: center; }
+
+  /* notifications open as a sheet under the top bar instead of a 340px popover */
+  .notif-dropdown { position: fixed; left: 12px; right: 12px; top: 64px; width: auto; max-height: calc(100dvh - 90px); }
+
+  /* tables scroll inside their card rather than pushing the page wider */
+  .data-table { display: block; max-width: 100%; overflow-x: auto; white-space: nowrap; -webkit-overflow-scrolling: touch; }
+
+  /* board lanes swipe */
+  .board { grid-template-columns: repeat(4, minmax(240px, 82%)); scroll-snap-type: x proximity; padding-bottom: 8px; }
+  .board > * { scroll-snap-align: start; }
+
+  /* universal search becomes a full-height sheet */
+  .palette-overlay { padding: 0; align-items: stretch; }
+  .palette { max-width: none; max-height: none; height: 100dvh; border-radius: 0; }
+  .palette-foot { display: none; }
+  .palette .cand-row { grid-template-columns: auto 1fr; }
+  .palette .cand-row > *:nth-child(n+3) { grid-column: 2; }
+
+  /* dialogs: near full width, scroll inside, keep the close button reachable */
+  .modal-overlay { padding: 12px; align-items: flex-end; }
+  .modal-panel, .modal-panel.wide { max-width: none; max-height: 92dvh; padding: 20px; border-radius: 18px; }
+}
+
+@media (max-width: 640px) {
+  .admin-main { padding: 12px 14px 44px; }
+  .tile-grid { grid-template-columns: repeat(2, 1fr); gap: 10px; }
+  .tile .n { font-size: 26px; }
+  .pipeline-strip { grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .role-grid { grid-template-columns: 1fr; }
+  .form-grid, .type-pick, .verdict-grid, .onboard-steps { grid-template-columns: 1fr; }
+
+  /* inline two-column layouts (candidate page, session page) stack into one */
+  .admin-main div[style*="grid-template-columns: 1fr 1fr"],
+  .admin-main div[style*="grid-template-columns: 1.4fr 1fr"],
+  .admin-main div[style*="grid-template-columns: repeat(auto-fit, minmax(340px"] { grid-template-columns: minmax(0, 1fr) !important; }
+
+  /* rows of buttons wrap instead of squeezing */
+  .admin-main div[style*="display: flex"][style*="justify-content: space-between"] { flex-wrap: wrap; gap: 10px; }
+
+  /* attention items: text on top, the action beneath it */
+  .attn-item { flex-wrap: wrap; align-items: flex-start; padding: 14px; }
+  .attn-item > :last-child { margin-left: 50px; }
+  .attn-item > :nth-child(2) { flex: 1 1 calc(100% - 52px); min-width: 0; }
+
+  /* candidate rows: a little tighter, action button full width */
+  .cand-row { padding: 12px 14px; gap: 8px 12px; }
+  .cand-row .btn, .cand-row > *:last-child .btn { width: auto; }
+
+  .wiz-steps { gap: 6px; }
+  .compare-grid { grid-template-columns: minmax(0, 1fr) !important; }
+  .admin-main .modal-header h3 { font-size: 17px; }
+}
+
+@media (max-width: 380px) {
+  .tile-grid { gap: 8px; }
+  .step { min-width: 128px; }
+  .admin-main .page-title, .admin-main h1 { font-size: 23px; }
+}
