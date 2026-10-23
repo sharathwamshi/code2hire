@@ -12,6 +12,7 @@ const blank = {
 }
 
 const emailDomainCorrections = {
+  'gil.com': 'gmail.com',
   'gmal.com': 'gmail.com',
   'gmai.com': 'gmail.com',
   'gmial.com': 'gmail.com',
@@ -53,12 +54,28 @@ export default function AddCandidateWizard({ open, roles, presetRoleId, onClose,
   if (!open) return null
 
   const onName = (v) => set({ full_name: v })
-  const onEmail = (v) => set({ email: v.toLowerCase() })
+  const onEmail = (v) => {
+    set({ email: v.toLowerCase() })
+    if (emailErrorBanner) setError('')
+  }
 
   const emailDomain = f.email.trim().toLowerCase().split('@')[1]
   const correctedDomain = emailDomainCorrections[emailDomain]
   const suggestedEmail = correctedDomain ? `${f.email.trim().slice(0, f.email.lastIndexOf('@') + 1)}${correctedDomain}` : ''
-  const emailValid = !suggestedEmail && /^[a-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[a-z0-9!#$%&'*+/=?^_`{|}~-]+)*@(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i.test(f.email.trim())
+  const emailParts = f.email.trim().split('@')
+  const emailValid = !suggestedEmail
+    && f.email.trim().length <= 254
+    && emailParts.length === 2
+    && emailParts[0].length <= 64
+    && /^[a-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[a-z0-9!#$%&'*+/=?^_`{|}~-]+)*@(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i.test(f.email.trim())
+  const emailError = f.email.trim()
+    ? !emailValid
+      ? suggestedEmail ? `Check the spelling. Did you mean ${suggestedEmail}?` : 'Enter a valid email address.'
+      : ''
+    : error === 'Email is required.' ? error : ''
+  const emailErrorBanner = error === 'Email is required.'
+    || error === 'Enter a valid email address.'
+    || (suggestedEmail && error === `Check the email domain. Did you mean ${suggestedEmail}?`)
   const step1Ok = f.jd_id && f.full_name.trim() && emailValid
   const hasResume = !!file || !!f.resume_text.trim()
   const real = f.track === 'interview'
@@ -176,7 +193,7 @@ export default function AddCandidateWizard({ open, roles, presetRoleId, onClose,
             </div>
             <div className="form-grid">
               <div className="field"><label>Full name <span aria-hidden="true">*</span></label><input className="input" value={f.full_name} onChange={(e) => onName(e.target.value)} placeholder="e.g. Priya Sharma" autoFocus={!!presetRoleId} required /></div>
-              <div className="field"><label>Email <span aria-hidden="true">*</span></label><input className="input" type="email" value={f.email} onChange={(e) => onEmail(e.target.value)} placeholder="priya@example.com" autoCapitalize="none" autoCorrect="off" spellCheck={false} style={{ textTransform: 'none' }} aria-invalid={!!suggestedEmail} required />{suggestedEmail && <p role="alert" style={{ fontSize: 12, marginTop: 5, color: 'var(--red)' }}>Check the spelling. Did you mean {suggestedEmail}?</p>}</div>
+              <div className="field"><label>Email <span aria-hidden="true">*</span></label><input className="input" type="email" value={f.email} onChange={(e) => onEmail(e.target.value)} placeholder="priya@example.com" autoCapitalize="none" autoCorrect="off" spellCheck={false} style={{ textTransform: 'none' }} aria-invalid={!!emailError} aria-describedby={emailError ? 'candidate-email-help candidate-email-error' : 'candidate-email-help'} required /><p id="candidate-email-help" style={{ fontSize: 10.5, lineHeight: 1.35, marginTop: 3, color: 'var(--ink-faint)' }}>Use a complete address, e.g. name@example.com.</p>{emailError && <p id="candidate-email-error" role="alert" style={{ fontSize: 12, lineHeight: 1.35, marginTop: 4, color: 'var(--red)' }}>{emailError}</p>}</div>
               <div className="field"><label>Username (same as email)</label><input className="input" value={f.email} readOnly style={{ textTransform: 'none' }} /></div>
             </div>
             <div className="field">
@@ -288,7 +305,7 @@ export default function AddCandidateWizard({ open, roles, presetRoleId, onClose,
           </div>
         )}
 
-        {error && <div className="banner banner-error" style={{ marginTop: 14, marginBottom: 0 }}>{error}</div>}
+        {error && !emailErrorBanner && <div className="banner banner-error" style={{ marginTop: 14, marginBottom: 0 }}>{error}</div>}
 
         {!result && (
           <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, marginTop: 22 }}>

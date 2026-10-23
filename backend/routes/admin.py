@@ -34,6 +34,7 @@ from reportlab.platypus import (
 admin_bp = Blueprint("admin", __name__, url_prefix="/api/admin")
 
 _EMAIL_DOMAIN_CORRECTIONS = {
+    "gil.com": "gmail.com",
     "gmal.com": "gmail.com",
     "gmai.com": "gmail.com",
     "gmial.com": "gmail.com",
@@ -154,7 +155,14 @@ def create_user():
         return jsonify({"error": "full name is required"}), 400
     if not email:
         return jsonify({"error": "email is required"}), 400
-    if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
+    email_parts = email.split("@")
+    email_pattern = r"[a-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[a-z0-9!#$%&'*+/=?^_`{|}~-]+)*@(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
+    if (
+        len(email) > 254
+        or len(email_parts) != 2
+        or len(email_parts[0]) > 64
+        or not re.fullmatch(email_pattern, email, re.IGNORECASE)
+    ):
         return jsonify({"error": "enter a valid email address"}), 400
     domain = email.rsplit("@", 1)[1]
     if domain in _EMAIL_DOMAIN_CORRECTIONS:
